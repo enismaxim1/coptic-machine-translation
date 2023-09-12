@@ -1,7 +1,7 @@
 
 import torch
 from torch.nn.functional import pad
-
+import os
 from tokenizer_utils import tokenize
 
 def file_iter(path):
@@ -12,6 +12,10 @@ def get_language_iters(path: str, src_language: str, tgt_language: str):
     # TODO: support compressed formats
     src_path =  f"{path}.{src_language}"
     tgt_path = f"{path}.{tgt_language}"
+    if not os.path.exists(src_path):
+        raise FileNotFoundError(f"Path {src_path} not found. Please add source data file to this location.")
+    if not os.path.exists(tgt_path):
+        raise FileNotFoundError(f"Path {tgt_path} not found. Please add target data file to this location.")
     return file_iter(src_path), file_iter(tgt_path)
 
 def collate_batch(

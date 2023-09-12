@@ -1,11 +1,12 @@
 
 import itertools
+from typing import Tuple
 from architecture import *
 
 import copy
 import os
 from iterators import collate_batch, get_language_iters
-from testing_utils import SimpleLossCompute
+from testing_utils import SimpleLossCompute, greedy_decode
 from tokenizer_utils import yield_tokens
 from training_utils import Batch, DummyOptimizer, DummyScheduler, LabelSmoothing, TrainState, rate, run_epoch
 from transformers import M2M100Tokenizer
@@ -20,9 +21,21 @@ import torchtext.datasets as datasets
 from torchtext.data.functional import to_map_style_dataset
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
+from torch.autograd import Variable
 import GPUtil
 
 class TranslationModel:
+    """
+    A neural machine translator between a source and target language. Upon initialization, the translator
+    will either fetched cached model parameters between the two languages or it will translate using parallel
+    train, validation, and test data located within the models/{src}-{target}/data directory.
+
+    To initialize a new translation model on a language pair src-target, ensure that the models/{src}-{target}/data 
+    directory has files train.src, train.tgt, valid.src, valid.tgt, test.src, and test.tgt.
+
+    PUBLIC API:
+    translate(src_sentence): Translates a sentence from the source language to the target language.
+    """
 
     def __init__(
             self, 
@@ -40,19 +53,35 @@ class TranslationModel:
         
         self.src_language = src_language
         self.tgt_language = tgt_language
-        default_tokenizer = M2M100Tokenizer.from_pretrained("facebook/m2m100_1.2B").tokenize
+        default_tokenizer = M2M100Tokenizer.from_pretrained("facebook/m2m100_1.2B")
         self.src_tokenizer = default_tokenizer if not src_tokenizer_override else src_tokenizer_override
         self.tgt_tokenizer = default_tokenizer if not tgt_tokenizer_override else tgt_tokenizer_override
 
         self.dir_path = f"models/{src_language}-{tgt_language}/"
         self.d_model = d_model
 
-        self.src_vocab, self.tgt_vocab = self.load_vocab()
-        self.architecture = self.make_architecture(N, d_model, d_ff, heads, dropout)
-        self.load_params(self.architecture)
+        self.src_vocab, self.tgt_vocab = self._load_vocab()
+        self.architecture = self._make_architecture(N, d_model, d_ff, heads, dropout)
+        self._load_params(self.architecture)
         
 
-    def make_architecture(
+    def translate(self, src_sentence: str):
+        self.architecture.eval()
+        src_tokens = self.src_tokenizer(src_sentence)
+        src = torch.LongTensor([[self.src_vocab[w] for w in src_tokens]])
+        src = Variable(src)
+        src_mask = (src != self.src_vocab["<blank>"]).unsqueeze(-2)
+        out = greedy_decode(self.architecture, src, src_mask, 
+                            max_len=60, start_symbol=self.tgt_vocab["<s>"])
+        print("Translation:", end="\t")
+        trans = "<s> "
+        for i in range(1, out.size(1)):
+            sym = self.tgt_vocab.get_itos()[out[0, i]]
+            if sym == "</s>": break
+            trans += sym + " "
+        return trans
+
+    def _make_architecture(
         self, N: int, d_model: int, d_ff: int, heads: int, dropout: float
     ):
         "Helper: Construct a model from hyperparameters."
@@ -76,7 +105,7 @@ class TranslationModel:
         return architecture
     
 
-    def load_params(
+    def _load_params(
             self, architecture: EncoderDecoder
         ) -> EncoderDecoder:
         # TODO: cache models only for given hyperparameters
@@ -93,37 +122,38 @@ class TranslationModel:
 
         model_path = f"{self.dir_path}model_final.pt"
         if not os.path.exists(model_path):
-            self.train(architecture, config)
+            self._train(architecture, config)
         else:
-            print(f"Model already trained. Loading from {model_path}.")
+            print(f"Using cached model parameters from path {model_path}.")
 
         architecture.load_state_dict(torch.load(f"{self.dir_path}model_final.pt"))
     
-    def load_vocab(self):
+    def _load_vocab(self):
         filename = f"{self.dir_path}vocab.pt"
         if not os.path.exists(filename):
-            vocab_src, vocab_tgt = self.build_vocabulary()
+            vocab_src, vocab_tgt = self._build_vocabulary()
             torch.save((vocab_src, vocab_tgt), filename)
         else:
             vocab_src, vocab_tgt = torch.load(filename)
+            print(f"Using cached vocabulary from path {filename}.")
         return vocab_src, vocab_tgt
     
 
-    def train(self, architecture: EncoderDecoder, config):
+    def _train(self, architecture: EncoderDecoder, config):
         print(f"Training translation model on {self.src_language}-{self.tgt_language}.")
         if config["distributed"]:
-            self.train_distributed_model(
+            self._train_distributed_model(
                 architecture,
                 config
             )
         else:
-            self.train_worker(
+            self._train_worker(
                 architecture, 0, 1, config, False
         )
     
 
 
-    def build_vocabulary(self) -> Vocab:
+    def _build_vocabulary(self) -> Tuple[Vocab, Vocab]:
         """Builds a vocabulary (torch.vocab.Vocab) for a given translation model."""
 
         print(f"Building vocab for {self.src_language}-{self.tgt_language}.")
@@ -157,7 +187,7 @@ class TranslationModel:
 
 
 
-    def create_dataloaders(
+    def _create_dataloaders(
         self,
         device,
         batch_size=12000,
@@ -211,7 +241,7 @@ class TranslationModel:
         return train_dataloader, valid_dataloader
 
 
-    def train_worker(
+    def _train_worker(
         self,
         architecture: EncoderDecoder,
         gpu: int,
@@ -240,7 +270,7 @@ class TranslationModel:
         )
         criterion.cuda(gpu)
 
-        train_dataloader, valid_dataloader = self.create_dataloaders(
+        train_dataloader, valid_dataloader = self._create_dataloaders(
             gpu,
             batch_size=config["batch_size"] // ngpus_per_node,
             max_padding=config["max_padding"],
@@ -305,7 +335,7 @@ class TranslationModel:
 
 
 
-    def train_distributed_model(self, config):
+    def _train_distributed_model(self, config):
 
         ngpus = torch.cuda.device_count()
         os.environ["MASTER_ADDR"] = "localhost"
@@ -313,7 +343,7 @@ class TranslationModel:
         print(f"Number of GPUs detected: {ngpus}")
         print("Spawning training processes ...")
         mp.spawn(
-            self.train_worker,
+            self._train_worker,
             nprocs=ngpus,
             args=(self, ngpus, config, True),
         )

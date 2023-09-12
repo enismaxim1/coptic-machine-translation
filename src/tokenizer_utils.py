@@ -27,7 +27,6 @@ def tokenize(text, tokenizer):
 
 
 def yield_tokens(data_iter, tokenizer_fn):
-    print("yielding tokens")
     try:
         for data in data_iter:
             yield tokenizer_fn(data)
