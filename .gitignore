@@ -1,2 +1,6 @@
 
 __pycache__
+datasets/
+*.err
+*.out
+*.sh
