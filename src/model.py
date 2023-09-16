@@ -5,7 +5,7 @@ from architecture import *
 
 import copy
 import os
-from iterators import collate_batch, get_language_iters
+from iterators import collate_batch_huggingface, from_streaming_dataset, get_language_iters
 from testing_utils import SimpleLossCompute, greedy_decode
 from tokenizer_utils import yield_tokens
 from training_utils import Batch, DummyOptimizer, DummyScheduler, LabelSmoothing, TrainState, rate, run_epoch
@@ -15,13 +15,18 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim.lr_scheduler import LambdaLR
 import torch.multiprocessing as mp
 import torchtext.datasets as datasets
-from torchtext.vocab import build_vocab_from_iterator, Vocab
-from iterators import collate_batch
-import torchtext.datasets as datasets
 from torchtext.data.functional import to_map_style_dataset
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from torch.autograd import Variable
+from datasets import IterableDatasetDict
+from transformers import PreTrainedTokenizerBase, PreTrainedTokenizerFast, BertTokenizer
+from tokenizers import Tokenizer
+from tokenizers.models import BPE
+from tokenizers.trainers import BpeTrainer
+from tokenizers.pre_tokenizers import Whitespace
+
+
 import GPUtil
 
 class TranslationModel:
@@ -41,8 +46,9 @@ class TranslationModel:
             self, 
             src_language: str, 
             tgt_language: str,
-            src_tokenizer_override = None,
-            tgt_tokenizer_override = None,
+            src_tokenizer_override: Optional[PreTrainedTokenizerBase] = None,
+            tgt_tokenizer_override: Optional[PreTrainedTokenizerBase] = None,
+            cloud_data_iter: Optional[IterableDatasetDict] = None,
             N: int = 6,
             d_model: int = 512,
             d_ff: int = 2048,
@@ -53,23 +59,42 @@ class TranslationModel:
         
         self.src_language = src_language
         self.tgt_language = tgt_language
-        default_tokenizer = M2M100Tokenizer.from_pretrained("facebook/m2m100_1.2B")
-        self.src_tokenizer = default_tokenizer if not src_tokenizer_override else src_tokenizer_override
-        self.tgt_tokenizer = default_tokenizer if not tgt_tokenizer_override else tgt_tokenizer_override
-
         self.dir_path = f"models/{src_language}-{tgt_language}/"
+
+        self.src_tokenizer = self._load_tokenizer(src_language) if not src_tokenizer_override else src_tokenizer_override
+        self.tgt_tokenizer = self._load_tokenizer(tgt_language) if not tgt_tokenizer_override else tgt_tokenizer_override
+        self.src_vocab = self.src_tokenizer.get_vocab()
+        self.tgt_vocab = self.tgt_tokenizer.get_vocab()
+        print(f"Initialized {src_language} vocab with {len(self.src_vocab)} tokens.")
+        print(f"Initialized {tgt_language} vocab with {len(self.tgt_vocab)} tokens.")
+
+        if cloud_data_iter:
+            copy1, copy2 = cloud_data_iter.copy(), cloud_data_iter.copy()
+            self.src_train = from_streaming_dataset(copy1["train"], src_language)
+            self.src_valid = from_streaming_dataset(copy1["validation"], src_language)
+            self.src_test = from_streaming_dataset(copy1["test"], src_language)
+            self.tgt_train = from_streaming_dataset(copy2["train"], tgt_language)
+            self.tgt_valid = from_streaming_dataset(copy2["validation"], tgt_language)
+            self.tgt_test = from_streaming_dataset(copy2["test"], tgt_language)
+        else:
+            train_path = f"{self.dir_path}data/train"
+            valid_path = f"{self.dir_path}data/valid"
+            test_path = f"{self.dir_path}data/test"
+            self.src_train, self.tgt_train = get_language_iters(train_path, self.src_language, self.tgt_language)
+            self.src_valid, self.tgt_valid = get_language_iters(valid_path, self.src_language, self.tgt_language)
+            self.src_test, self.tgt_test = get_language_iters(test_path, self.src_language, self.tgt_language)
+
         self.d_model = d_model
 
-        self.src_vocab, self.tgt_vocab = self._load_vocab()
         self.architecture = self._make_architecture(N, d_model, d_ff, heads, dropout)
         self._load_params(self.architecture)
         
 
     def translate(self, src_sentence: str):
+        raise NotImplementedError()
         self.architecture.eval()
-        src_tokens = self.src_tokenizer(src_sentence)
-        src = torch.LongTensor([[self.src_vocab[w] for w in src_tokens]])
-        src = Variable(src)
+        encoded = self.src_tokenizer(src_sentence, return_tensors = "pt")
+        src = encoded["input_ids"]
         src_mask = (src != self.src_vocab["<blank>"]).unsqueeze(-2)
         out = greedy_decode(self.architecture, src, src_mask, 
                             max_len=60, start_symbol=self.tgt_vocab["<s>"])
@@ -105,6 +130,18 @@ class TranslationModel:
         return architecture
     
 
+    def _train(self, architecture: EncoderDecoder, config):
+        print(f"Training translation model on {self.src_language}-{self.tgt_language}.")
+        if config["distributed"]:
+            self._train_distributed_model(
+                architecture,
+                config
+            )
+        else:
+            self._train_worker(
+                architecture, 0, 1, config, False
+        )
+
     def _load_params(
             self, architecture: EncoderDecoder
         ) -> EncoderDecoder:
@@ -128,62 +165,33 @@ class TranslationModel:
 
         architecture.load_state_dict(torch.load(f"{self.dir_path}model_final.pt"))
     
-    def _load_vocab(self):
-        filename = f"{self.dir_path}vocab.pt"
-        if not os.path.exists(filename):
-            vocab_src, vocab_tgt = self._build_vocabulary()
-            torch.save((vocab_src, vocab_tgt), filename)
-        else:
-            vocab_src, vocab_tgt = torch.load(filename)
-            print(f"Using cached vocabulary from path {filename}.")
-        return vocab_src, vocab_tgt
+
+    def _load_tokenizer(self, language: str):
+        tokenizer_path = f"{self.dir_path}{language}_tokenizer.json"
+
+        if not os.path.exists(tokenizer_path):
+            self._train_tokenizer(language)
+
+        tokenizer = PreTrainedTokenizerFast(tokenizer_file = tokenizer_path)
+        tokenizer.pad_token = "[PAD]"
+        return tokenizer
     
 
-    def _train(self, architecture: EncoderDecoder, config):
-        print(f"Training translation model on {self.src_language}-{self.tgt_language}.")
-        if config["distributed"]:
-            self._train_distributed_model(
-                architecture,
-                config
-            )
-        else:
-            self._train_worker(
-                architecture, 0, 1, config, False
-        )
-    
+    def _train_tokenizer(self, language: str, vocab_size = 10000):
+        
+        print(f"Training new BPE tokenizer for language {language}.")
 
+        data_path = f"{self.dir_path}data/train.{language}"
+        if not os.path.exists(data_path):
+            raise FileNotFoundError(f"File {data_path} does not exist; could not train tokenizer on language {language}.")
 
-    def _build_vocabulary(self) -> Tuple[Vocab, Vocab]:
-        """Builds a vocabulary (torch.vocab.Vocab) for a given translation model."""
+        tokenizer = Tokenizer(BPE(unk_token="[UNK]"))
+        tokenizer.pre_tokenizer = Whitespace()
+        trainer = BpeTrainer(vocab_size = vocab_size, special_tokens=["[UNK]", "[CLS]", "[SEP]", "[PAD]", "[MASK]"])
 
-        print(f"Building vocab for {self.src_language}-{self.tgt_language}.")
-
-        train_path = f"{self.dir_path}data/train"
-        valid_path = f"{self.dir_path}data/valid"
-        test_path = f"{self.dir_path}data/test"
-
-        src_train, tgt_train = get_language_iters(train_path, self.src_language, self.tgt_language)
-        src_valid, tgt_valid = get_language_iters(valid_path, self.src_language, self.tgt_language)
-        src_test, tgt_test = get_language_iters(test_path, self.src_language, self.tgt_language)
-
-
-        src_vocab = build_vocab_from_iterator(
-            yield_tokens(itertools.chain(src_train, src_valid, src_test), self.src_tokenizer),
-            min_freq=2,
-            specials=["<s>", "</s>", "<blank>", "<unk>"],
-        )
-
-        src_vocab.set_default_index(src_vocab["<unk>"])
-
-        tgt_vocab = build_vocab_from_iterator(
-            yield_tokens(itertools.chain(tgt_train, tgt_valid, tgt_test), self.tgt_tokenizer),
-            min_freq=2,
-            specials=["<s>", "</s>", "<blank>", "<unk>"],
-        )
-
-        tgt_vocab.set_default_index(tgt_vocab["<unk>"])
-
-        return src_vocab, tgt_vocab
+        # Train the tokenizer
+        tokenizer.train(files=[data_path], trainer=trainer)
+        tokenizer.save(f"{self.dir_path}{language}_tokenizer.json")
 
 
 
@@ -194,28 +202,17 @@ class TranslationModel:
         max_padding=128,
         is_distributed=True,
     ):
-        
 
         def collate_fn(batch):
-            return collate_batch(
-                batch,
-                self.src_tokenizer,
-                self.tgt_tokenizer,
-                self.src_vocab,
-                self.tgt_vocab,
-                device,
-                max_padding=max_padding,
-                pad_id=self.tgt_vocab.get_stoi()["<blank>"],
-            )
-        
-        train_path = f"{self.dir_path}data/train"
-        valid_path = f"{self.dir_path}data/valid"
-        train_iter = zip(*get_language_iters(train_path, self.src_language, self.tgt_language))
-        valid_iter = zip(*get_language_iters(valid_path, self.src_language, self.tgt_language))
+            return collate_batch_huggingface(batch, self.src_tokenizer, self.tgt_tokenizer, device, max_padding)
+
+        train_iter = zip(self.src_train, self.tgt_train)
+        valid_iter = zip(self.src_valid, self.tgt_valid)
 
         train_iter_map = to_map_style_dataset(
             train_iter
         )  # DistributedSampler needs a dataset len()
+
         train_sampler = (
             DistributedSampler(train_iter_map) if is_distributed else None
         )
@@ -243,7 +240,6 @@ class TranslationModel:
 
     def _train_worker(
         self,
-        architecture: EncoderDecoder,
         gpu: int,
         ngpus_per_node,
         config,
@@ -251,9 +247,8 @@ class TranslationModel:
     ):
         print(f"Train worker process using GPU: {gpu} for training", flush=True)
         torch.cuda.set_device(gpu)
-
-        pad_idx = self.tgt_vocab["<blank>"]
-        model = architecture
+        pad_idx = self.tgt_tokenizer.pad_token_id
+        model = self.architecture
         model.cuda(gpu)
         module = model
         is_main_process = True
@@ -336,12 +331,12 @@ class TranslationModel:
 
 
     def _train_distributed_model(self, config):
-
         ngpus = torch.cuda.device_count()
         os.environ["MASTER_ADDR"] = "localhost"
         os.environ["MASTER_PORT"] = "12356"
         print(f"Number of GPUs detected: {ngpus}")
         print("Spawning training processes ...")
+        # TODO: fix this; not even sure how it works in its present state
         mp.spawn(
             self._train_worker,
             nprocs=ngpus,
