@@ -5,7 +5,7 @@ from architecture import *
 
 import copy
 import os
-from iterators import collate_batch_huggingface, from_streaming_dataset, get_language_iters
+from iterators import collate_batch_huggingface, from_streaming_dataset, get_language_iter
 from testing_utils import SimpleLossCompute, greedy_decode
 from tokenizer_utils import yield_tokens
 from training_utils import Batch, DummyOptimizer, DummyScheduler, LabelSmoothing, TrainState, rate, run_epoch
@@ -25,8 +25,8 @@ from tokenizers import Tokenizer
 from tokenizers.models import BPE
 from tokenizers.trainers import BpeTrainer
 from tokenizers.pre_tokenizers import Whitespace
-
-
+from pathlib import Path
+import sacrebleu
 import GPUtil
 
 class TranslationModel:
@@ -54,12 +54,17 @@ class TranslationModel:
             d_ff: int = 2048,
             heads: int = 8,
             dropout: float = 0.1,
+            model_max_len: int =  5000,
             **kwargs
             ):
         
         self.src_language = src_language
         self.tgt_language = tgt_language
         self.dir_path = f"models/{src_language}-{tgt_language}/"
+
+        self.d_model = d_model
+        self.model_max_len = model_max_len
+        self.cloud_data_iter = cloud_data_iter
 
         self.src_tokenizer = self._load_tokenizer(src_language) if not src_tokenizer_override else src_tokenizer_override
         self.tgt_tokenizer = self._load_tokenizer(tgt_language) if not tgt_tokenizer_override else tgt_tokenizer_override
@@ -68,52 +73,76 @@ class TranslationModel:
         print(f"Initialized {src_language} vocab with {len(self.src_vocab)} tokens.")
         print(f"Initialized {tgt_language} vocab with {len(self.tgt_vocab)} tokens.")
 
-        if cloud_data_iter:
-            copy1, copy2 = cloud_data_iter.copy(), cloud_data_iter.copy()
-            self.src_train = from_streaming_dataset(copy1["train"], src_language)
-            self.src_valid = from_streaming_dataset(copy1["validation"], src_language)
-            self.src_test = from_streaming_dataset(copy1["test"], src_language)
-            self.tgt_train = from_streaming_dataset(copy2["train"], tgt_language)
-            self.tgt_valid = from_streaming_dataset(copy2["validation"], tgt_language)
-            self.tgt_test = from_streaming_dataset(copy2["test"], tgt_language)
-        else:
-            train_path = f"{self.dir_path}data/train"
-            valid_path = f"{self.dir_path}data/valid"
-            test_path = f"{self.dir_path}data/test"
-            self.src_train, self.tgt_train = get_language_iters(train_path, self.src_language, self.tgt_language)
-            self.src_valid, self.tgt_valid = get_language_iters(valid_path, self.src_language, self.tgt_language)
-            self.src_test, self.tgt_test = get_language_iters(test_path, self.src_language, self.tgt_language)
+        
+        
 
-        self.d_model = d_model
-
-        self.architecture = self._make_architecture(N, d_model, d_ff, heads, dropout)
-        self._load_params(self.architecture)
+        self.architecture = self._make_architecture(N, d_model, d_ff, heads, dropout, model_max_len)
+        self._load_params()
         
 
     def translate(self, src_sentence: str):
-        raise NotImplementedError()
+        
+        if not src_sentence or src_sentence.isspace():
+            return src_sentence
+        
         self.architecture.eval()
         encoded = self.src_tokenizer(src_sentence, return_tensors = "pt")
         src = encoded["input_ids"]
-        src_mask = (src != self.src_vocab["<blank>"]).unsqueeze(-2)
-        out = greedy_decode(self.architecture, src, src_mask, 
-                            max_len=60, start_symbol=self.tgt_vocab["<s>"])
-        print("Translation:", end="\t")
-        trans = "<s> "
-        for i in range(1, out.size(1)):
-            sym = self.tgt_vocab.get_itos()[out[0, i]]
-            if sym == "</s>": break
-            trans += sym + " "
-        return trans
+        src_mask = (src != self.src_tokenizer.pad_token_id).unsqueeze(-2)
+        out = greedy_decode(
+            self.architecture, 
+            src, 
+            src_mask, 
+            max_len=60, 
+            start_symbol=self.tgt_tokenizer.bos_token_id, 
+            end_symbol=self.tgt_tokenizer.eos_token_id
+        )
+        return self.tgt_tokenizer.decode(out[0].tolist(), skip_special_tokens=True)
+    
+    def translate_test_data(self):
+        print(f"Computing translations from {self.src_language}-{self.tgt_language}.")
 
+        data_dir = f"{self.dir_path}data/"
+        if not os.path.exists(data_dir):
+            os.mkdir(data_dir)
+        
+        translation_file = f"{data_dir}translations.{self.tgt_language}"
+
+        if os.path.exists(translation_file):
+            print(f"Translation file already exists. Skipping computation.")
+            return
+        
+        with open(translation_file, 'w') as translations:
+            for test_sentence, _ in self.get_test_iters():
+                translations.write(self.translate(test_sentence) + "\n")
+
+            
+    def compute_bleu(self):
+        translation_file = f"{self.dir_path}data/translations.{self.tgt_language}"
+        if not os.path.exists(translation_file):
+            raise FileNotFoundError(f"Could not find translations file at path {translation_file}.")
+        
+        translations = Path(translation_file).read_text().split("\n")
+        refs = [[ref] for _, ref in self.get_test_iters()]
+        return sacrebleu.corpus_bleu(translations, refs)
+    
+    def compute_chrf(self):
+        translation_file = f"{self.dir_path}data/translations.{self.tgt_language}"
+        if not os.path.exists(translation_file):
+            raise FileNotFoundError(f"Could not find translations file at path {translation_file}.")
+        
+        translations = Path(translation_file).read_text().split("\n")
+        refs = [[ref] for _, ref in self.get_test_iters()]
+        return sacrebleu.corpus_chrf(translations, refs)
+    
     def _make_architecture(
-        self, N: int, d_model: int, d_ff: int, heads: int, dropout: float
+        self, N: int, d_model: int, d_ff: int, heads: int, dropout: float, model_max_len: int
     ):
         "Helper: Construct a model from hyperparameters."
         c = copy.deepcopy
         attn = MultiHeadedAttention(heads, d_model)
         ff = PositionwiseFeedForward(d_model, d_ff, dropout)
-        position = PositionalEncoding(d_model, dropout)
+        position = PositionalEncoding(d_model, dropout, model_max_len)
         architecture = EncoderDecoder(
             Encoder(EncoderLayer(d_model, c(attn), c(ff), dropout), N),
             Decoder(DecoderLayer(d_model, c(attn), c(attn), c(ff), dropout), N),
@@ -130,22 +159,22 @@ class TranslationModel:
         return architecture
     
 
-    def _train(self, architecture: EncoderDecoder, config):
+    def _train(self, config):
         print(f"Training translation model on {self.src_language}-{self.tgt_language}.")
         if config["distributed"]:
             self._train_distributed_model(
-                architecture,
                 config
             )
         else:
             self._train_worker(
-                architecture, 0, 1, config, False
+                0, 1, config, False
         )
 
     def _load_params(
-            self, architecture: EncoderDecoder
-        ) -> EncoderDecoder:
+            self
+        ):
         # TODO: cache models only for given hyperparameters
+        # TODO: verify that distributed behavior works as intended
         config = {
             "batch_size": 32,
             "distributed": False,
@@ -159,11 +188,11 @@ class TranslationModel:
 
         model_path = f"{self.dir_path}model_final.pt"
         if not os.path.exists(model_path):
-            self._train(architecture, config)
+            self._train(config)
         else:
             print(f"Using cached model parameters from path {model_path}.")
 
-        architecture.load_state_dict(torch.load(f"{self.dir_path}model_final.pt"))
+        self.architecture.load_state_dict(torch.load(f"{self.dir_path}model_final.pt"))
     
 
     def _load_tokenizer(self, language: str):
@@ -174,6 +203,10 @@ class TranslationModel:
 
         tokenizer = PreTrainedTokenizerFast(tokenizer_file = tokenizer_path)
         tokenizer.pad_token = "[PAD]"
+        # TODO: hacky fix since CLS and SEP are not actually bos and eos tokens; find a better fix for self.translate
+        tokenizer.bos_token = "[BOS]"
+        tokenizer.eos_token = "[EOS]"
+        tokenizer.model_max_length = self.model_max_len
         return tokenizer
     
 
@@ -187,13 +220,37 @@ class TranslationModel:
 
         tokenizer = Tokenizer(BPE(unk_token="[UNK]"))
         tokenizer.pre_tokenizer = Whitespace()
-        trainer = BpeTrainer(vocab_size = vocab_size, special_tokens=["[UNK]", "[CLS]", "[SEP]", "[PAD]", "[MASK]"])
+        trainer = BpeTrainer(vocab_size = vocab_size, special_tokens=["[UNK]", "[EOS]", "[BOS]", "[PAD]", "[MASK]"])
 
         # Train the tokenizer
         tokenizer.train(files=[data_path], trainer=trainer)
         tokenizer.save(f"{self.dir_path}{language}_tokenizer.json")
 
 
+    def get_train_iters(self):
+        if self.cloud_data_iter:
+            iter_copy = self.cloud_data_iter.copy()
+            return from_streaming_dataset(iter_copy["train"], self.src_language, self.tgt_language)
+        else:
+            train_path = f"{self.dir_path}data/train"
+            return get_language_iter(train_path, self.src_language, self.tgt_language)
+
+    def get_valid_iters(self):
+        if self.cloud_data_iter:
+            iter_copy = self.cloud_data_iter.copy()
+            return from_streaming_dataset(iter_copy["validation"], self.src_language, self.tgt_language)
+        else:
+            train_path = f"{self.dir_path}data/valid"
+            return get_language_iter(train_path, self.src_language, self.tgt_language)
+
+
+    def get_test_iters(self):
+        if self.cloud_data_iter:
+            iter_copy = self.cloud_data_iter.copy()
+            return from_streaming_dataset(iter_copy["test"], self.src_language, self.tgt_language)
+        else:
+            train_path = f"{self.dir_path}data/test"
+            return get_language_iter(train_path, self.src_language, self.tgt_language)
 
     def _create_dataloaders(
         self,
@@ -206,8 +263,8 @@ class TranslationModel:
         def collate_fn(batch):
             return collate_batch_huggingface(batch, self.src_tokenizer, self.tgt_tokenizer, device, max_padding)
 
-        train_iter = zip(self.src_train, self.tgt_train)
-        valid_iter = zip(self.src_valid, self.tgt_valid)
+        train_iter = self.get_train_iters()
+        valid_iter = self.get_valid_iters()
 
         train_iter_map = to_map_style_dataset(
             train_iter
@@ -340,7 +397,7 @@ class TranslationModel:
         mp.spawn(
             self._train_worker,
             nprocs=ngpus,
-            args=(self, ngpus, config, True),
+            args=(ngpus, config, True),
         )
 
 
