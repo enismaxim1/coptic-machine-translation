@@ -54,6 +54,7 @@ def run_epoch(
 ):
     """Train a single epoch"""
     start = time.time()
+    beginning = start
     total_tokens = 0
     total_loss = 0
     tokens = 0
@@ -93,6 +94,9 @@ def run_epoch(
             tokens = 0
         del loss
         del loss_node
+    if mode == "train" or mode == "train+log":
+        # format elapsed time in HH:MM:SS
+        print(f"Ending epoch. Elapsed time: {time.strftime('%H:%M:%S', time.gmtime(time.time() - beginning))}")
     return total_loss / total_tokens, train_state
 
 

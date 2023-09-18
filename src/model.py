@@ -1,11 +1,11 @@
 
 import itertools
-from typing import Tuple
+from typing import Tuple, Union
 from architecture import *
 
 import copy
 import os
-from iterators import collate_batch_huggingface, from_streaming_dataset, get_language_iter
+from iterators import collate_batch_huggingface
 from testing_utils import SimpleLossCompute, greedy_decode
 from tokenizer_utils import yield_tokens
 from training_utils import Batch, DummyOptimizer, DummyScheduler, LabelSmoothing, TrainState, rate, run_epoch
@@ -19,7 +19,7 @@ from torchtext.data.functional import to_map_style_dataset
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from torch.autograd import Variable
-from datasets import IterableDatasetDict
+from datasets import IterableDatasetDict, DatasetDict, Dataset, IterableDataset
 from transformers import PreTrainedTokenizerBase, PreTrainedTokenizerFast, BertTokenizer
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
@@ -46,9 +46,10 @@ class TranslationModel:
             self, 
             src_language: str, 
             tgt_language: str,
+            dataset: Optional[Union[(DatasetDict, Dataset, IterableDatasetDict, IterableDataset)]],
             src_tokenizer_override: Optional[PreTrainedTokenizerBase] = None,
             tgt_tokenizer_override: Optional[PreTrainedTokenizerBase] = None,
-            cloud_data_iter: Optional[IterableDatasetDict] = None,
+            distributed = False,
             N: int = 6,
             d_model: int = 512,
             d_ff: int = 2048,
@@ -64,20 +65,19 @@ class TranslationModel:
 
         self.d_model = d_model
         self.model_max_len = model_max_len
-        self.cloud_data_iter = cloud_data_iter
+        self.dataset = dataset
 
         self.src_tokenizer = self._load_tokenizer(src_language) if not src_tokenizer_override else src_tokenizer_override
         self.tgt_tokenizer = self._load_tokenizer(tgt_language) if not tgt_tokenizer_override else tgt_tokenizer_override
+        self.add_special_tokens(self.src_tokenizer, self.tgt_tokenizer)
+
         self.src_vocab = self.src_tokenizer.get_vocab()
         self.tgt_vocab = self.tgt_tokenizer.get_vocab()
         print(f"Initialized {src_language} vocab with {len(self.src_vocab)} tokens.")
         print(f"Initialized {tgt_language} vocab with {len(self.tgt_vocab)} tokens.")
 
-        
-        
-
         self.architecture = self._make_architecture(N, d_model, d_ff, heads, dropout, model_max_len)
-        self._load_params()
+        self._load_params(train_distributed = distributed)
         
 
     def translate(self, src_sentence: str):
@@ -113,7 +113,8 @@ class TranslationModel:
             return
         
         with open(translation_file, 'w') as translations:
-            for test_sentence, _ in self.get_test_iters():
+            for language_pair in self.datasets['test']['translations']:
+                test_sentence = language_pair[self.src_language]
                 translations.write(self.translate(test_sentence) + "\n")
 
             
@@ -123,7 +124,7 @@ class TranslationModel:
             raise FileNotFoundError(f"Could not find translations file at path {translation_file}.")
         
         translations = Path(translation_file).read_text().split("\n")
-        refs = [[ref] for _, ref in self.get_test_iters()]
+        refs = [[language_pair[self.tgt_language]] for _, language_pair in self.datasets['test']['translations']]
         return sacrebleu.corpus_bleu(translations, refs)
     
     def compute_chrf(self):
@@ -132,7 +133,7 @@ class TranslationModel:
             raise FileNotFoundError(f"Could not find translations file at path {translation_file}.")
         
         translations = Path(translation_file).read_text().split("\n")
-        refs = [[ref] for _, ref in self.get_test_iters()]
+        refs = [[language_pair[self.tgt_language]] for _, language_pair in self.datasets['test']['translations']]
         return sacrebleu.corpus_chrf(translations, refs)
     
     def _make_architecture(
@@ -171,13 +172,14 @@ class TranslationModel:
         )
 
     def _load_params(
-            self
+            self,
+            train_distributed: bool,
         ):
         # TODO: cache models only for given hyperparameters
         # TODO: verify that distributed behavior works as intended
         config = {
             "batch_size": 32,
-            "distributed": False,
+            "distributed": train_distributed,
             "num_epochs": 8,
             "accum_iter": 10,
             "base_lr": 1.0,
@@ -202,13 +204,19 @@ class TranslationModel:
             self._train_tokenizer(language)
 
         tokenizer = PreTrainedTokenizerFast(tokenizer_file = tokenizer_path)
-        tokenizer.pad_token = "[PAD]"
-        # TODO: hacky fix since CLS and SEP are not actually bos and eos tokens; find a better fix for self.translate
-        tokenizer.bos_token = "[BOS]"
-        tokenizer.eos_token = "[EOS]"
         tokenizer.model_max_length = self.model_max_len
         return tokenizer
     
+
+    def add_special_tokens(self, src_tokenizer: PreTrainedTokenizerBase, tgt_tokenizer: PreTrainedTokenizerBase):
+        for tokenizer in [src_tokenizer, tgt_tokenizer]:
+            if not tokenizer.bos_token_id:
+                tokenizer.add_special_tokens({"bos_token": "[BOS]"})
+            if not tokenizer.eos_token_id:
+                tokenizer.add_special_tokens({"eos_token": "[EOS]"})
+            if not tokenizer.pad_token_id:
+                tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+
 
     def _train_tokenizer(self, language: str, vocab_size = 10000):
         
@@ -227,31 +235,6 @@ class TranslationModel:
         tokenizer.save(f"{self.dir_path}{language}_tokenizer.json")
 
 
-    def get_train_iters(self):
-        if self.cloud_data_iter:
-            iter_copy = self.cloud_data_iter.copy()
-            return from_streaming_dataset(iter_copy["train"], self.src_language, self.tgt_language)
-        else:
-            train_path = f"{self.dir_path}data/train"
-            return get_language_iter(train_path, self.src_language, self.tgt_language)
-
-    def get_valid_iters(self):
-        if self.cloud_data_iter:
-            iter_copy = self.cloud_data_iter.copy()
-            return from_streaming_dataset(iter_copy["validation"], self.src_language, self.tgt_language)
-        else:
-            train_path = f"{self.dir_path}data/valid"
-            return get_language_iter(train_path, self.src_language, self.tgt_language)
-
-
-    def get_test_iters(self):
-        if self.cloud_data_iter:
-            iter_copy = self.cloud_data_iter.copy()
-            return from_streaming_dataset(iter_copy["test"], self.src_language, self.tgt_language)
-        else:
-            train_path = f"{self.dir_path}data/test"
-            return get_language_iter(train_path, self.src_language, self.tgt_language)
-
     def _create_dataloaders(
         self,
         device,
@@ -261,32 +244,25 @@ class TranslationModel:
     ):
 
         def collate_fn(batch):
-            return collate_batch_huggingface(batch, self.src_tokenizer, self.tgt_tokenizer, device, max_padding)
+            return collate_batch_huggingface(batch, self.src_language, self.tgt_language, self.src_tokenizer, self.tgt_tokenizer, device, max_padding)
 
-        train_iter = self.get_train_iters()
-        valid_iter = self.get_valid_iters()
-
-        train_iter_map = to_map_style_dataset(
-            train_iter
-        )  # DistributedSampler needs a dataset len()
 
         train_sampler = (
-            DistributedSampler(train_iter_map) if is_distributed else None
+            DistributedSampler(self.dataset['train']) if is_distributed else None
         )
-        valid_iter_map = to_map_style_dataset(valid_iter)
         valid_sampler = (
-            DistributedSampler(valid_iter_map) if is_distributed else None
+            DistributedSampler(self.dataset['validation']) if is_distributed else None
         )
 
         train_dataloader = DataLoader(
-            train_iter_map,
+            self.dataset['train'],
             batch_size=batch_size,
             shuffle=(train_sampler is None),
             sampler=train_sampler,
             collate_fn=collate_fn,
         )
         valid_dataloader = DataLoader(
-            valid_iter_map,
+            self.dataset['validation'],
             batch_size=batch_size,
             shuffle=(valid_sampler is None),
             sampler=valid_sampler,
