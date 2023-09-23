@@ -1,26 +1,20 @@
 
-import itertools
-from typing import Tuple, Union
+from typing import Union
 from architecture import *
 
 import copy
 import os
 from iterators import collate_batch_huggingface
 from testing_utils import SimpleLossCompute, greedy_decode
-from tokenizer_utils import yield_tokens
 from training_utils import Batch, DummyOptimizer, DummyScheduler, LabelSmoothing, TrainState, rate, run_epoch
-from transformers import M2M100Tokenizer
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim.lr_scheduler import LambdaLR
 import torch.multiprocessing as mp
-import torchtext.datasets as datasets
-from torchtext.data.functional import to_map_style_dataset
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
-from torch.autograd import Variable
-from datasets import IterableDatasetDict, DatasetDict, Dataset, IterableDataset
-from transformers import PreTrainedTokenizerBase, PreTrainedTokenizerFast, BertTokenizer
+from datasets import IterableDatasetDict, DatasetDict
+from transformers import PreTrainedTokenizerBase, PreTrainedTokenizerFast
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
 from tokenizers.trainers import BpeTrainer
@@ -50,6 +44,7 @@ class TranslationModel:
             src_tokenizer_override: Optional[PreTrainedTokenizerBase] = None,
             tgt_tokenizer_override: Optional[PreTrainedTokenizerBase] = None,
             distributed = False,
+            save_to_disk = True,
             N: int = 6,
             d_model: int = 512,
             d_ff: int = 2048,
@@ -66,6 +61,7 @@ class TranslationModel:
         self.d_model = d_model
         self.model_max_len = model_max_len
         self.dataset = dataset
+        self.save_to_disk = save_to_disk
 
         self.src_tokenizer = self._load_tokenizer(src_language) if not src_tokenizer_override else src_tokenizer_override
         self.tgt_tokenizer = self._load_tokenizer(tgt_language) if not tgt_tokenizer_override else tgt_tokenizer_override
@@ -191,10 +187,11 @@ class TranslationModel:
         model_path = f"{self.dir_path}model_final.pt"
         if not os.path.exists(model_path):
             self._train(config)
+            # set architecture back to CPU
+            self.architecture.to("cpu")
         else:
             print(f"Using cached model parameters from path {model_path}.")
-
-        self.architecture.load_state_dict(torch.load(f"{self.dir_path}model_final.pt"))
+            self.architecture.load_state_dict(torch.load(os.path.join(self.dir_path, "model_final.pt")))
     
 
     def _load_tokenizer(self, language: str):
@@ -335,7 +332,7 @@ class TranslationModel:
             )
 
             GPUtil.showUtilization()
-            if is_main_process:
+            if is_main_process and self.save_to_disk:
                 checkpoint_dir = f"{self.dir_path}checkpoints/"
                 if not os.path.exists(checkpoint_dir):
                     os.mkdir(checkpoint_dir)
@@ -356,7 +353,7 @@ class TranslationModel:
             print(sloss)
             torch.cuda.empty_cache()
 
-        if is_main_process:
+        if is_main_process and self.save_to_disk:
             file_path = "%s%sfinal.pt" % (self.dir_path, config["file_prefix"])
             torch.save(module.state_dict(), file_path)
 
