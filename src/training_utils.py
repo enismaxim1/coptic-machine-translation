@@ -88,7 +88,8 @@ def run_epoch(
                     "Epoch Step: %6d | Accumulation Step: %3d | Loss: %6.2f "
                     + "| Tokens / Sec: %7.1f | Learning Rate: %6.1e"
                 )
-                % (i, n_accum, loss / batch.ntokens, tokens / elapsed, lr)
+                % (i, n_accum, loss / batch.ntokens, tokens / elapsed, lr),
+                flush=True
             )
             start = time.time()
             tokens = 0
@@ -96,7 +97,7 @@ def run_epoch(
         del loss_node
     if mode == "train" or mode == "train+log":
         # format elapsed time in HH:MM:SS
-        print(f"Ending epoch. Elapsed time: {time.strftime('%H:%M:%S', time.gmtime(time.time() - beginning))}")
+        print(f"Ending epoch. Elapsed time: {time.strftime('%H:%M:%S', time.gmtime(time.time() - beginning))}", flush=True)
     return total_loss / total_tokens, train_state
 
 

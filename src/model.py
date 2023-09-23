@@ -46,7 +46,7 @@ class TranslationModel:
             self, 
             src_language: str, 
             tgt_language: str,
-            dataset: Optional[Union[(DatasetDict, Dataset, IterableDatasetDict, IterableDataset)]],
+            dataset: Union[DatasetDict, IterableDatasetDict],
             src_tokenizer_override: Optional[PreTrainedTokenizerBase] = None,
             tgt_tokenizer_override: Optional[PreTrainedTokenizerBase] = None,
             distributed = False,
@@ -113,7 +113,7 @@ class TranslationModel:
             return
         
         with open(translation_file, 'w') as translations:
-            for language_pair in self.datasets['test']['translations']:
+            for language_pair in self.dataset['test']['translation']:
                 test_sentence = language_pair[self.src_language]
                 translations.write(self.translate(test_sentence) + "\n")
 
@@ -124,7 +124,7 @@ class TranslationModel:
             raise FileNotFoundError(f"Could not find translations file at path {translation_file}.")
         
         translations = Path(translation_file).read_text().split("\n")
-        refs = [[language_pair[self.tgt_language]] for _, language_pair in self.datasets['test']['translations']]
+        refs = [[language_pair[self.tgt_language]] for language_pair in self.dataset['test']['translation']]
         return sacrebleu.corpus_bleu(translations, refs)
     
     def compute_chrf(self):
@@ -133,7 +133,7 @@ class TranslationModel:
             raise FileNotFoundError(f"Could not find translations file at path {translation_file}.")
         
         translations = Path(translation_file).read_text().split("\n")
-        refs = [[language_pair[self.tgt_language]] for _, language_pair in self.datasets['test']['translations']]
+        refs = [[language_pair[self.tgt_language]] for language_pair in self.dataset['test']['translation']]
         return sacrebleu.corpus_chrf(translations, refs)
     
     def _make_architecture(
@@ -274,9 +274,9 @@ class TranslationModel:
     def _train_worker(
         self,
         gpu: int,
-        ngpus_per_node,
+        ngpus_per_node: int,
         config,
-        is_distributed=False,
+        is_distributed: bool,
     ):
         print(f"Train worker process using GPU: {gpu} for training", flush=True)
         torch.cuda.set_device(gpu)
@@ -369,7 +369,6 @@ class TranslationModel:
         os.environ["MASTER_PORT"] = "12356"
         print(f"Number of GPUs detected: {ngpus}")
         print("Spawning training processes ...")
-        # TODO: fix this; not even sure how it works in its present state
         mp.spawn(
             self._train_worker,
             nprocs=ngpus,
