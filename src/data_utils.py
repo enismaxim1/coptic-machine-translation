@@ -1,4 +1,5 @@
 import os
+import datasets
 from datasets import Dataset, DatasetDict
 
 def make_splits(
@@ -96,11 +97,19 @@ def load_dataset(data_dir: str, translation_task: str, split=None):
     src_language, tgt_language = translation_task.split("-")
     splits = ["train", "validation", "test"] if not split else [split]
     data_dirs = [os.path.join(data_dir, split) for split in splits]
+        
+    try:
+        split_datasets = [
+            Dataset.from_dict(
+                {"translation": translations(data_dir, src_language, tgt_language)}
+            )
+            for data_dir in data_dirs
+        ]
+        dataset = DatasetDict(dict(zip(splits, split_datasets)))
+        
+    
+    except FileNotFoundError:
+        dataset = datasets.load_dataset(data_dir, translation_task)
 
-    datasets = [
-        Dataset.from_dict(
-            {"translation": translations(data_dir, src_language, tgt_language)}
-        )
-        for data_dir in data_dirs
-    ]
-    return DatasetDict(dict(zip(splits, datasets)))
+    dataset.data_dir = data_dir
+    return dataset
