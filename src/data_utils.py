@@ -81,7 +81,7 @@ def translations(data_dir, src_language, tgt_language):
         tgt_filepath, "r", encoding="utf-8"
     ) as tgt_file:
         return [
-            {src_language: src_sentence, tgt_language: tgt_sentence}
+            {src_language: src_sentence.strip(), tgt_language: tgt_sentence.strip()}
             for src_sentence, tgt_sentence in zip(src_file, tgt_file)
         ]
 

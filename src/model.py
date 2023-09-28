@@ -38,11 +38,12 @@ class TranslationModel:
 
     def __init__(
             self, 
+            model_name: str,
             src_language: str, 
             tgt_language: str,
             dataset: Union[DatasetDict, IterableDatasetDict],
-            src_tokenizer_override: Optional[PreTrainedTokenizerBase] = None,
-            tgt_tokenizer_override: Optional[PreTrainedTokenizerBase] = None,
+            src_tokenizer: Optional[PreTrainedTokenizerBase] = None,
+            tgt_tokenizer: Optional[PreTrainedTokenizerBase] = None,
             distributed = False,
             save_to_disk = True,
             N: int = 6,
@@ -53,18 +54,19 @@ class TranslationModel:
             model_max_len: int =  5000,
             **kwargs
             ):
-        
+        self.model_name = model_name
         self.src_language = src_language
         self.tgt_language = tgt_language
-        self.dir_path = f"models/{src_language}-{tgt_language}/"
-
+        self.dir_path = os.path.join("models", f"{model_name}-{src_language}-{tgt_language}")
+        if not os.path.exists(self.dir_path):
+            os.path.makedirs(self.dir_path)
         self.d_model = d_model
         self.model_max_len = model_max_len
         self.dataset = dataset
         self.save_to_disk = save_to_disk
 
-        self.src_tokenizer = self._load_tokenizer(src_language) if not src_tokenizer_override else src_tokenizer_override
-        self.tgt_tokenizer = self._load_tokenizer(tgt_language) if not tgt_tokenizer_override else tgt_tokenizer_override
+        self.src_tokenizer = self._load_tokenizer(src_language) if not src_tokenizer else src_tokenizer
+        self.tgt_tokenizer = self._load_tokenizer(tgt_language) if not tgt_tokenizer else tgt_tokenizer
         self.add_special_tokens(self.src_tokenizer, self.tgt_tokenizer)
 
         self.src_vocab = self.src_tokenizer.get_vocab()
@@ -98,9 +100,9 @@ class TranslationModel:
     def translate_test_data(self):
         print(f"Computing translations from {self.src_language}-{self.tgt_language}.")
 
-        data_dir = f"{self.dir_path}data/"
+        data_dir = os.path.join(self.dir_path, "data/")
         if not os.path.exists(data_dir):
-            os.mkdir(data_dir)
+            os.makedirs(data_dir)
         
         translation_file = f"{data_dir}translations.{self.tgt_language}"
 
@@ -109,28 +111,35 @@ class TranslationModel:
             return
         
         with open(translation_file, 'w') as translations:
-            for language_pair in self.dataset['test']['translation']:
+            for language_pair in tqdm(self.dataset['test']['translation'], total=len(self.dataset['test'])):
                 test_sentence = language_pair[self.src_language]
                 translations.write(self.translate(test_sentence) + "\n")
 
             
     def compute_bleu(self):
-        translation_file = f"{self.dir_path}data/translations.{self.tgt_language}"
+        translation_file = os.path.join(self.dir_path, f"data/translations.{self.tgt_language}")
         if not os.path.exists(translation_file):
             raise FileNotFoundError(f"Could not find translations file at path {translation_file}.")
         
-        translations = Path(translation_file).read_text().split("\n")
-        refs = [[language_pair[self.tgt_language]] for language_pair in self.dataset['test']['translation']]
-        return sacrebleu.corpus_bleu(translations, refs)
-    
+        translations = Path(translation_file).read_text().strip().split("\n")
+        refs = [language_pair[self.tgt_language] for language_pair in self.dataset['test']['translation']]
+        bleu = sacrebleu.metrics.BLEU()
+        return bleu.corpus_score(translations, [refs])
+
+        
     def compute_chrf(self):
-        translation_file = f"{self.dir_path}data/translations.{self.tgt_language}"
+        translation_file = os.path.join(self.dir_path, f"data/translations.{self.tgt_language}")
         if not os.path.exists(translation_file):
             raise FileNotFoundError(f"Could not find translations file at path {translation_file}.")
         
-        translations = Path(translation_file).read_text().split("\n")
-        refs = [[language_pair[self.tgt_language]] for language_pair in self.dataset['test']['translation']]
-        return sacrebleu.corpus_chrf(translations, refs)
+        translations = Path(translation_file).read_text().strip().split("\n")
+        refs = [language_pair[self.tgt_language] for language_pair in self.dataset['test']['translation']]
+        return sacrebleu.corpus_chrf(translations, [refs])
+    
+    def print_stats(self):
+        print(f"Translation model {self.model_name} trained on {self.src_language}-{self.tgt_language}:")
+        print(f"BLEU: {self.compute_bleu()}")
+        print(f"CHRF: {self.compute_chrf()}\n")
     
     def _make_architecture(
         self, N: int, d_model: int, d_ff: int, heads: int, dropout: float, model_max_len: int
@@ -184,7 +193,7 @@ class TranslationModel:
             "file_prefix": "model_",
         }
 
-        model_path = f"{self.dir_path}model_final.pt"
+        model_path = os.path.join(self.dir_path, "model_final.pt")
         if not os.path.exists(model_path):
             self._train(config)
             # set architecture back to CPU
@@ -195,7 +204,7 @@ class TranslationModel:
     
 
     def _load_tokenizer(self, language: str):
-        tokenizer_path = f"{self.dir_path}{language}_tokenizer.json"
+        tokenizer_path = os.path.join(self.dir_path, f"{language}_tokenizer.json")
 
         if not os.path.exists(tokenizer_path):
             self._train_tokenizer(language)

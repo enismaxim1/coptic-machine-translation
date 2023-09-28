@@ -1,4 +1,7 @@
 
+import pandas as pd
+import sacrebleu
+from tqdm import tqdm
 from architecture import EncoderDecoder, Generator
 from utils import subsequent_mask
 
