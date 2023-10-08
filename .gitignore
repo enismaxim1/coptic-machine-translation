@@ -5,3 +5,4 @@ datasets/
 *.err
 *.out
 *.sh
+translation/translation.egg-info/
