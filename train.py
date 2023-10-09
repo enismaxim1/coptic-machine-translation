@@ -88,7 +88,7 @@ if __name__ == "__main__":
         tokenizer=AutoTokenizer.from_pretrained("Helsinki-NLP/opus-mt-fr-en"),
         model=AutoModel.from_pretrained("Helsinki-NLP/opus-mt-fr-en"),
     )
-    config = HuggingFaceTranslationModel(
+    config = HuggingFaceTranslationModelTrainingConfig(
         evaluation_strategy="epoch",
         learning_rate=2e-5,
         per_device_train_batch_size=32,
