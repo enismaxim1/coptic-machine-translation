@@ -5,6 +5,10 @@ Code Credits: https://nlp.seas.harvard.edu/annotated-transformer/
 
 A Python module for creating custom neural machine translators from a source to target language.
 
+### Installing the Package
+To install the `translation` package, you must first ensure that your virtual environment has all the required dependencies. TODO: add dependency management.
+Install the package by running `pip install -e translation/` in your terminal at the root of the Git repo.
+
 ### Creating a Translator
 To create a translator, use the following code:
 ```
