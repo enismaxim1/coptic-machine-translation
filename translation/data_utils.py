@@ -1,6 +1,8 @@
+import json
 import os
 import datasets
 from datasets import Dataset, DatasetDict
+
 
 def make_splits(
     dir_path: str,
@@ -69,10 +71,8 @@ def make_splits(
             train.writelines(lines[num_train + num_validation :])
 
 
-def translations(data_dir, src_language, tgt_language):
+def translations(src_filepath: str, tgt_filepath, src_language: str, tgt_language: str):
     """Load parallel data from files in data_dir."""
-    src_filepath = os.path.join(data_dir, f"{src_language}.txt")
-    tgt_filepath = os.path.join(data_dir, f"{tgt_language}.txt")
     if not os.path.exists(src_filepath):
         raise FileNotFoundError(f"{src_filepath} not found.")
     if not os.path.exists(tgt_filepath):
@@ -87,6 +87,38 @@ def translations(data_dir, src_language, tgt_language):
         ]
 
 
+def set_translation_json(data_dir, src_language: str, tgt_language: str):
+    if os.path.exists(os.path.join(data_dir, "translations.json")):
+        raise FileExistsError(
+            f"{os.path.join(data_dir, 'translations.json')} already exists."
+        )
+
+    src_filepath = os.path.join(data_dir, f"{src_language}.txt")
+    tgt_filepath = os.path.join(data_dir, f"{tgt_language}.txt")
+    """Load parallel data from files in data_dir into a json file."""
+    if not os.path.exists(src_filepath):
+        raise FileNotFoundError(f"{src_filepath} not found.")
+    if not os.path.exists(tgt_filepath):
+        raise FileNotFoundError(f"{tgt_filepath} not found.")
+
+    with open(src_filepath, "r", encoding="utf-8") as src_file, open(
+        tgt_filepath, "r", encoding="utf-8"
+    ) as tgt_file:
+        translations = [
+            {
+                "translation": {
+                    src_language: src_sentence.strip(),
+                    tgt_language: tgt_sentence.strip(),
+                }
+            }
+            for src_sentence, tgt_sentence in zip(src_file, tgt_file)
+            if src_sentence and tgt_sentence
+        ]
+
+        with open(os.path.join(data_dir, "translations.json"), "w") as f:
+            json.dump(translations, f)
+
+
 def load_dataset(data_dir: str, translation_task: str, split=None):
     """
     Load dataset from files in data_dir.
@@ -94,20 +126,17 @@ def load_dataset(data_dir: str, translation_task: str, split=None):
     translation_task: string of the form "src_language-tgt_language".
     split: optional string specifying which split to load.
     """
-    src_language, tgt_language = translation_task.split("-")
+
     splits = ["train", "validation", "test"] if not split else [split]
-    data_dirs = [os.path.join(data_dir, split) for split in splits]
-        
+    data_files = {
+        split: os.path.join(data_dir, split, f"translations.json") for split in splits
+    }
+
     try:
-        split_datasets = [
-            Dataset.from_dict(
-                {"translation": translations(data_dir, src_language, tgt_language)}
-            )
-            for data_dir in data_dirs
-        ]
-        dataset = DatasetDict(dict(zip(splits, split_datasets)))
-        
-    
+        if not os.path.exists(data_dir):
+            raise FileNotFoundError(f"{data_dir} not found.")
+        return datasets.load_dataset("json", data_files=data_files, split=split)
+
     except FileNotFoundError:
         dataset = datasets.load_dataset(data_dir, translation_task)
 

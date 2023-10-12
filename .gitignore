@@ -4,5 +4,4 @@ __pycache__
 datasets/
 *.err
 *.out
-*.sh
 translation/translation.egg-info/
