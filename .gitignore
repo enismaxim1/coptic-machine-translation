@@ -5,3 +5,4 @@ datasets/
 *.err
 *.out
 translation/translation.egg-info/
+models/

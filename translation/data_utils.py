@@ -135,10 +135,16 @@ def load_dataset(data_dir: str, translation_task: str, split=None):
     try:
         if not os.path.exists(data_dir):
             raise FileNotFoundError(f"{data_dir} not found.")
-        return datasets.load_dataset("json", data_files=data_files, split=split)
+        data = datasets.load_dataset("json", data_files=data_files, split=split)
+        for split in splits:
+            data[split].data_dir = data_dir
+        data.data_dir = data_dir
+        return data
 
     except FileNotFoundError:
         dataset = datasets.load_dataset(data_dir, translation_task)
+        for split in splits:
+            dataset[split].data_dir = data_dir
 
     dataset.data_dir = data_dir
     return dataset

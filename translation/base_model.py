@@ -33,9 +33,19 @@ class GenerationConfig:
     num_beams: int = 1
     num_beam_groups: int = 1
 
-    def save(self, path: str):
+    def save(
+        self,
+        path: str,
+        dataset_dir: Optional[str] = None,
+        dataset_task: Optional[str] = None,
+    ):
+        params = self.__dict__
+        if dataset_dir:
+            params["dataset_dir"] = dataset_dir
+        if dataset_task:
+            params["dataset_task"] = dataset_task
         with open(path, "w") as f:
-            json.dump(self.__dict__, f)
+            json.dump(params, f, indent=4)
 
     def hash_fields(self):
         sha = sha256()
@@ -103,7 +113,6 @@ class BaseTranslationModel:
         """
 
         print(f"Computing translations from {self.src_language}-{self.tgt_language}.")
-
         self._apply_kwargs(config, **kwargs)
 
         config_hash = self._hash_data_with_config(test_dataset, config)
@@ -118,7 +127,11 @@ class BaseTranslationModel:
             print(f"Translation file already exists. Skipping computation.")
             return
 
-        config.save(os.path.join(data_dir, "generation_config.json"))
+        config.save(
+            os.path.join(data_dir, "generation_config.json"),
+            test_dataset.data_dir,
+            f"{self.src_language}-{self.tgt_language}",
+        )
 
         with open(translation_file, "w") as translations:
             for language_pair in tqdm(
