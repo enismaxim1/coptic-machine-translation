@@ -80,14 +80,14 @@ class BaseTranslationModel:
 
         self.save_to_disk = save_to_disk
 
-    def translate(self, src_sentence: str):
+    def translate(self, src_sentence: str, config: GenerationConfig):
         raise NotImplementedError()
 
     def train(self):
         raise NotImplementedError()
 
     @classmethod
-    def from_pretrained(self):
+    def from_pretrained(cls, path: str):
         raise NotImplementedError()
 
     def _hash_data_with_config(self, test_dataset, config):
@@ -139,6 +139,13 @@ class BaseTranslationModel:
             ):
                 test_sentence = language_pair[self.src_language]
                 translations.write(self.translate(test_sentence, config) + "\n")
+
+
+        bleu = self.compute_bleu(test_dataset, config)
+        chrf = self.compute_chrf(test_dataset, config)
+        with open(os.path.join(data_dir, "metrics.txt"), "w") as metrics:
+            metrics.write(str(bleu) + "\n")
+            metrics.write(str(chrf) + "\n")
 
     def compute_bleu(self, test_dataset: Dataset, config=GenerationConfig(), **kwargs):
         # TODO: improve caching so that multiple test sets can be used

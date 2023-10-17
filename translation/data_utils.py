@@ -1,7 +1,96 @@
 import json
 import os
+import random
+from transformers import BertTokenizer
 import datasets
 from datasets import Dataset, DatasetDict
+
+
+def generate_shuffled_data(
+    language: str, dataset: Dataset, num_examples: int, tokenizer: BertTokenizer
+):
+    """Generate shuffled data from a dataset, by rearranging tokens in each example."""
+    dataset = datasets.Dataset.from_dict(dataset[:num_examples])
+    seen_tokens = set()
+    for example in dataset:
+        sentence = example["translation"][language]
+        seen_tokens.update(tokenizer.tokenize(sentence))
+
+    special_tokens = set(tokenizer.all_special_tokens)
+    seen_tokens.difference_update(special_tokens)
+
+    vocab = list(seen_tokens)
+    shuffled_vocab = list(vocab)
+    random.shuffle(shuffled_vocab)
+    vocab_map = {
+        k: v
+        for k, v in zip(vocab, shuffled_vocab)
+        if k and v and k.isalpha() and v.isalpha()
+    }
+    vocab_map.update({k: v for k,v in zip(vocab, shuffled_vocab) if k.startswith("##") and v.startswith("##")})
+    print(len(vocab_map))
+
+    return (
+        dataset.map(
+            lambda example: {
+                "translation": {
+                    "fr": tokenizer.convert_tokens_to_string(
+                        [
+                            vocab_map.get(token, token)
+                            for token in tokenizer.tokenize(
+                                example["translation"]["fr"]
+                            )
+                        ]
+                    ),
+                    "en": example["translation"]["en"],
+                }
+            }
+        )
+    )
+
+
+def generate_shuffled_split_data(
+    language: str, dataset: Dataset, num_examples: int, tokenizer: BertTokenizer, p_split: float
+):
+    """Generate shuffled data from a dataset, by rearranging tokens in each example."""
+    dataset = datasets.Dataset.from_dict(dataset[:num_examples])
+    seen_tokens = set()
+    for example in dataset:
+        sentence = example["translation"][language]
+        seen_tokens.update(tokenizer.tokenize(sentence))
+
+    special_tokens = set(tokenizer.all_special_tokens)
+    seen_tokens.difference_update(special_tokens)
+
+    vocab = list(seen_tokens)
+    shuffled_vocab = list(vocab)
+    random.shuffle(shuffled_vocab)
+    vocab_map = {
+        k: v
+        for k, v in zip(vocab, shuffled_vocab)
+        if k and v and k.isalpha() and v.isalpha()
+    }
+    vocab_map.update({k: v for k,v in zip(vocab, shuffled_vocab) if k.startswith("##") and v.startswith("##")})
+    print(len(vocab_map))
+
+    return (
+        dataset.map(
+            lambda example: {
+                "translation": {
+                    "fr": tokenizer.convert_tokens_to_string(
+                        [
+                            vocab_map.get(token, token)
+                            for token in tokenizer.tokenize(
+                                example["translation"]["fr"]
+                            )
+                        ]
+                    ),
+                    "en": example["translation"]["en"],
+                }
+            }
+        )
+    )
+
 
 
 def make_splits(
@@ -121,7 +210,7 @@ def set_translation_json(data_dir, src_language: str, tgt_language: str):
 
 def load_dataset(data_dir: str, translation_task: str, split=None):
     """
-    Load dataset from files in data_dir.
+    Custom load dataset function replacing the HuggingFace load_dataset.
     data_dir: path to directory containing train, validation, and test files.
     translation_task: string of the form "src_language-tgt_language".
     split: optional string specifying which split to load.
@@ -135,16 +224,14 @@ def load_dataset(data_dir: str, translation_task: str, split=None):
     try:
         if not os.path.exists(data_dir):
             raise FileNotFoundError(f"{data_dir} not found.")
-        data = datasets.load_dataset("json", data_files=data_files, split=split)
-        for split in splits:
-            data[split].data_dir = data_dir
-        data.data_dir = data_dir
-        return data
+        dataset = datasets.load_dataset("json", data_files=data_files, split=split)
 
     except FileNotFoundError:
-        dataset = datasets.load_dataset(data_dir, translation_task)
+        dataset = datasets.load_dataset(data_dir, translation_task, split=split)
+
+    if split is None:
         for split in splits:
             dataset[split].data_dir = data_dir
-
     dataset.data_dir = data_dir
+
     return dataset

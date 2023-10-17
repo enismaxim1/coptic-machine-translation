@@ -6,7 +6,7 @@ from architecture import *
 
 import copy
 import os
-from base_model import BaseTranslationModel
+from base_model import BaseTranslationModel, GenerationConfig
 from iterators import collate_batch_huggingface
 from testing_utils import SimpleLossCompute, greedy_decode
 from training_utils import (
@@ -25,7 +25,7 @@ import torch.multiprocessing as mp
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from datasets import IterableDatasetDict, DatasetDict, Dataset
-from transformers import PreTrainedTokenizerBase, PreTrainedTokenizerFast
+from transformers import PreTrainedTokenizerBase, PreTrainedTokenizerFast, AutoTokenizer
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
 from tokenizers.trainers import BpeTrainer
@@ -111,7 +111,9 @@ class TranslationModel(BaseTranslationModel):
                 model_max_len,
             )
 
-    def translate(self, src_sentence: str):
+        self.save_args()
+
+    def translate(self, src_sentence: str, config = GenerationConfig()):
         if not src_sentence or src_sentence.isspace():
             return src_sentence
 
@@ -123,7 +125,7 @@ class TranslationModel(BaseTranslationModel):
             self.model,
             src,
             src_mask,
-            max_len=60,
+            max_len=config.max_new_tokens,
             start_symbol=self.tgt_tokenizer.bos_token_id,
             end_symbol=self.tgt_tokenizer.eos_token_id,
         )
@@ -162,11 +164,15 @@ class TranslationModel(BaseTranslationModel):
         return architecture
 
     def train(self, dataset: Dataset, train_config: TranslationTrainingConfig = TranslationTrainingConfig()):
+        """
+        Trains on a dataset with test and validation data.
+        """
         print(f"Training translation model on {self.src_language}-{self.tgt_language}.")
         if train_config.distributed:
             self._train_distributed_model(train_config)
         else:
             self._train_worker(0, dataset, 1, train_config, False)
+
 
     def save(self, train_config: TranslationTrainingConfig):
         self.save_model_info()
@@ -175,6 +181,21 @@ class TranslationModel(BaseTranslationModel):
             self.model.state_dict(),
             os.path.join(self.dir_path, "model_final.pt"),
         )
+
+    def save_args(self):
+        # save tokenizers
+        src_tokenizer_path = os.path.join(self.dir_path, "src_tokenizer")
+        tgt_tokenizer_path = os.path.join(self.dir_path, "tgt_tokenizer")
+        self.src_tokenizer.save_pretrained(src_tokenizer_path)
+        self.tgt_tokenizer.save_pretrained(tgt_tokenizer_path)
+        # save model args
+        args = {
+            "model_name": self.model_name,
+            "src_language": self.src_language,
+            "tgt_language": self.tgt_language
+        }
+        with open(os.path.join(self.dir_path, "args.json"), "w") as f:
+            json.dump(args, f)
 
     def save_model_info(self):
         # Use for backwards compatibility
@@ -194,10 +215,21 @@ class TranslationModel(BaseTranslationModel):
     @classmethod
     def from_pretrained(cls, path: str):
         print(f"Loading model from path {path}.")
+        args = json.load(open(os.path.join(path, "args.json"), "r"))
+        src_tokenizer = AutoTokenizer.from_pretrained(os.path.join(path, "src_tokenizer"))
+        tgt_tokenizer = AutoTokenizer.from_pretrained(os.path.join(path, "tgt_tokenizer"))
         model_info = json.load(open(os.path.join(path, "model_info.json"), "r"))
         model = cls.make_model(**model_info)
         model.load_state_dict(torch.load(os.path.join(path, "model_final.pt")))
-        return model
+        return TranslationModel(
+            args["model_name"],
+            args["src_language"],
+            args["tgt_language"],
+            src_tokenizer,
+            tgt_tokenizer,
+            model,
+            save_to_disk=False,
+        )
 
     def _load_tokenizer(self, language: str):
         tokenizer_path = os.path.join(self.dir_path, f"{language}_tokenizer.json")
@@ -370,7 +402,7 @@ class TranslationModel(BaseTranslationModel):
             torch.cuda.empty_cache()
 
         if is_main_process and self.save_to_disk:
-            self.save()
+            self.save(train_config)
 
     def _train_distributed_model(self, train_config: TranslationTrainingConfig):
         ngpus = torch.cuda.device_count()
