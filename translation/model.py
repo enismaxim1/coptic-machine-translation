@@ -34,6 +34,7 @@ import GPUtil
 
 @dataclass
 class TranslationTrainingConfig:
+    job_hash: str
     batch_size: int = 32
     distributed: bool = False
     num_epochs: int = 8
@@ -41,6 +42,7 @@ class TranslationTrainingConfig:
     base_lr: float = 1.0
     max_padding: int = 128
     warmup: int = 3000
+    commit_hash: str = get_git_revision_short_hash()
 
     def save(self, path: str):
         with open(path, "w") as f:
@@ -163,7 +165,7 @@ class TranslationModel(BaseTranslationModel):
                 nn.init.xavier_uniform_(p)
         return architecture
 
-    def train(self, dataset: Dataset, train_config: TranslationTrainingConfig = TranslationTrainingConfig()):
+    def train(self, dataset: Dataset, train_config: TranslationTrainingConfig):
         """
         Trains on a dataset with test and validation data.
         """
@@ -172,7 +174,7 @@ class TranslationModel(BaseTranslationModel):
             self._train_distributed_model(train_config)
         else:
             self._train_worker(0, dataset, 1, train_config, False)
-
+        self.model.to(torch.device('cpu'))
 
     def save(self, train_config: TranslationTrainingConfig):
         self.save_model_info()
