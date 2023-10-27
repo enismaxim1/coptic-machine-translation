@@ -27,10 +27,11 @@ TRAIN_FILE_NAME=$(basename $TRAIN_FILE)
 TRAIN_FILE_HASH=$(md5sum $TRAIN_FILE_NAME | cut -d' ' -f1)
 
 CURR_DATE=$(date +%Y-%m-%d)
+CURR_TIME=$(date +%H:%M:%S)
 mkdir -p train_jobs/$CURR_DATE
 
 # Copy the python executable to the train_jobs directory with a uniquely generated name
-cp $TRAIN_FILE train_jobs/$CURR_DATE/train_$TRAIN_FILE_HASH.py
+cp $TRAIN_FILE train_jobs/$CURR_DATE/$CURR_TIME-$TRAIN_FILE_HASH.py
 
 echo "Training with file $TRAIN_FILE and job hash $TRAIN_FILE_HASH"
 python3 $TRAIN_FILE $TRAIN_FILE_HASH
