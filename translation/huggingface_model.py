@@ -1,6 +1,9 @@
 import json
 import os
 from attr import dataclass
+import numpy as np
+import torch
+import evaluate
 import transformers
 from transformers import (
     AutoModelForSeq2SeqLM,
@@ -55,18 +58,18 @@ class HuggingFaceTranslationModel(BaseTranslationModel):
             tokenizer.save_pretrained(self.dir_path)
             model.save_pretrained(self.dir_path)
 
-    def translate(self, src_sentence: str, generation_config: GenerationConfig()):
+    def translate(self, src_sentence: str, config: GenerationConfig):
         inputs = self.tokenizer.encode(src_sentence, return_tensors="pt")
         outputs = self.model.generate(
-            inputs,
-            max_length=generation_config.max_length,
-            max_new_tokens=generation_config.max_new_tokens,
-            min_length=generation_config.min_length,
-            min_new_tokens=generation_config.min_new_tokens,
-            early_stopping=generation_config.early_stopping,
-            do_sample=generation_config.do_sample,
-            num_beams=generation_config.num_beams,
-            num_beam_groups=generation_config.num_beam_groups,
+            inputs[:, :self.tokenizer.model_max_length],
+            max_length=config.max_length,
+            max_new_tokens=config.max_new_tokens,
+            min_length=config.min_length,
+            min_new_tokens=config.min_new_tokens,
+            early_stopping=config.early_stopping,
+            do_sample=config.do_sample,
+            num_beams=config.num_beams,
+            num_beam_groups=config.num_beam_groups,
         )
         translated_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
         return translated_text
@@ -116,6 +119,24 @@ class HuggingFaceTranslationModel(BaseTranslationModel):
         )
 
         data_collator = DataCollatorForSeq2Seq(self.tokenizer, model=self.model, return_tensors="pt")
+        
+        def compute_metrics(eval_preds):
+            metric = evaluate.load("sacrebleu")
+            preds, labels = eval_preds
+            if isinstance(preds, tuple):
+                preds = preds[0]
+            decoded_preds = self.tokenizer.batch_decode(preds, skip_special_tokens=True)
+
+            labels = np.where(labels != -100, labels, self.tokenizer.pad_token_id)
+            decoded_labels = self.tokenizer.batch_decode(labels, skip_special_tokens=True)
+            decoded_preds, decoded_labels = self.postprocess_text(decoded_preds, decoded_labels)
+            result = metric.compute(predictions=decoded_preds, references=decoded_labels)   
+            result = {"bleu": result["score"]}
+            prediction_lens = [np.count_nonzero(pred != self.tokenizer.pad_token_id) for pred in preds]
+            result["gen_len"] = np.mean(prediction_lens)
+            result = {k: round(v, 4) for k, v in result.items()}
+            return result
+        
         trainer = Seq2SeqTrainer(
             self.model,
             args=args,
@@ -123,11 +144,13 @@ class HuggingFaceTranslationModel(BaseTranslationModel):
             eval_dataset=tokenized_datasets["validation"],
             data_collator=data_collator,
             tokenizer=self.tokenizer,
+            compute_metrics=compute_metrics
         )
         trainer.train()
         if self.save_to_disk:
             train_config.save(os.path.join(self.dir_path, "train_config.json"))
             trainer.save_model(self.dir_path)
+        self.model.to(torch.device("cpu"))
 
 
 
