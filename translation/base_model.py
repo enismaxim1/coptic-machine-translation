@@ -39,7 +39,7 @@ class GenerationConfig:
         dataset_dir: Optional[str] = None,
         dataset_task: Optional[str] = None,
     ):
-        params = self.__dict__
+        params = self.__dict__.copy()
         if dataset_dir:
             params["dataset_dir"] = dataset_dir
         if dataset_task:
@@ -92,8 +92,8 @@ class BaseTranslationModel:
 
     def _hash_data_with_config(self, test_dataset, config):
         data_cache_files = test_dataset.cache_files
+        sha = sha256()
         for data_cache_file in data_cache_files:
-            sha = sha256()
             sha.update(data_cache_file["filename"].encode("utf-8"))
         sha.update(config.hash_fields().encode("utf-8"))
         return sha.hexdigest()[:8]
@@ -140,14 +140,16 @@ class BaseTranslationModel:
                 test_sentence = language_pair[self.src_language]
                 translations.write(self.translate(test_sentence, config) + "\n")
 
-
+        print("Translations completed. Computing metrics...")
         bleu = self.compute_bleu(test_dataset, config)
         chrf = self.compute_chrf(test_dataset, config)
+        print(bleu)
+        print(chrf)
         with open(os.path.join(data_dir, "metrics.txt"), "w") as metrics:
             metrics.write(str(bleu) + "\n")
             metrics.write(str(chrf) + "\n")
 
-    def compute_bleu(self, test_dataset: Dataset, config=GenerationConfig(), **kwargs):
+    def compute_bleu(self, test_dataset: Dataset, config=GenerationConfig(), max_num_translations = None, **kwargs):
         # TODO: improve caching so that multiple test sets can be used
         self._apply_kwargs(config, **kwargs)
         data_hash = self._hash_data_with_config(test_dataset, config)
@@ -160,13 +162,14 @@ class BaseTranslationModel:
             )
             self.translate_test_data(test_dataset, config)
 
+        max_num_translations = len(test_dataset) if max_num_translations is None else max_num_translations
         translations = Path(translation_file).read_text().strip().split("\n")
         refs = [
             language_pair[self.tgt_language]
             for language_pair in test_dataset["translation"]
         ]
         bleu = sacrebleu.metrics.BLEU()
-        return bleu.corpus_score(translations, [refs])
+        return bleu.corpus_score(translations[:max_num_translations], [refs[:max_num_translations]])
 
     def compute_chrf(self, test_dataset: Dataset, config=GenerationConfig(), **kwargs):
         self._apply_kwargs(config, **kwargs)
