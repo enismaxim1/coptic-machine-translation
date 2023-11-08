@@ -10,9 +10,9 @@ from transformers import (
     DataCollatorForSeq2Seq,
     Seq2SeqTrainingArguments,
     Seq2SeqTrainer,
-    MarianMTModel,
     MarianConfig,
     AutoTokenizer,
+    EarlyStoppingCallback,
 )
 from datasets import Dataset
 from base_model import BaseTranslationModel, GenerationConfig
@@ -30,6 +30,8 @@ class HuggingFaceTranslationModelTrainingConfig:
     save_total_limit: int = 3
     num_train_epochs: int = 1
     predict_with_generate: bool = True
+    eval_steps: int = 16000
+    logging_steps: int = 500
     commit_hash: str = get_git_revision_short_hash()
 
     def save(self, path: str):
@@ -61,7 +63,7 @@ class HuggingFaceTranslationModel(BaseTranslationModel):
     def translate(self, src_sentence: str, config: GenerationConfig):
         inputs = self.tokenizer.encode(src_sentence, return_tensors="pt")
         outputs = self.model.generate(
-            inputs[:, :self.tokenizer.model_max_length],
+            inputs[:, : self.tokenizer.model_max_length],
             max_length=config.max_length,
             max_new_tokens=config.max_new_tokens,
             min_length=config.min_length,
@@ -73,34 +75,37 @@ class HuggingFaceTranslationModel(BaseTranslationModel):
         )
         translated_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
         return translated_text
-    
 
     def preprocess_function(self, data):
         inputs = [ex[self.src_language] for ex in data["translation"]]
         targets = [ex[self.tgt_language] for ex in data["translation"]]
         model_inputs = self.tokenizer(
-            inputs, max_length=self.max_input_length, truncation=True, padding='max_length'
+            inputs,
+            max_length=self.max_input_length,
+            truncation=True,
+            padding="max_length",
         )
 
         # Setup the tokenizer for targets
         labels = self.tokenizer(
-            text_target=targets, max_length=self.max_target_length, truncation=True, padding='max_length'
+            text_target=targets,
+            max_length=self.max_target_length,
+            truncation=True,
+            padding="max_length",
         )
 
         model_inputs["labels"] = labels["input_ids"]
 
-        # Add decoder input ids 
+        # Add decoder input ids
         model_inputs["decoder_input_ids"] = labels["input_ids"]
 
         return model_inputs
-
 
     def postprocess_text(self, preds, labels):
         preds = [pred.strip() for pred in preds]
         labels = [[label.strip()] for label in labels]
 
         return preds, labels
-
 
     def train(
         self, dataset: Dataset, train_config: HuggingFaceTranslationModelTrainingConfig
@@ -116,10 +121,17 @@ class HuggingFaceTranslationModel(BaseTranslationModel):
             save_total_limit=train_config.save_total_limit,
             num_train_epochs=train_config.num_train_epochs,
             predict_with_generate=train_config.predict_with_generate,
+            eval_steps=train_config.eval_steps,
+            logging_steps=train_config.logging_steps,
+            save_strategy="steps" if self.save_to_disk else "no",
         )
 
-        data_collator = DataCollatorForSeq2Seq(self.tokenizer, model=self.model, return_tensors="pt")
-        
+        print("created argumnets")
+
+        data_collator = DataCollatorForSeq2Seq(
+            self.tokenizer, model=self.model, return_tensors="pt"
+        )
+
         def compute_metrics(eval_preds):
             metric = evaluate.load("sacrebleu")
             preds, labels = eval_preds
@@ -128,15 +140,23 @@ class HuggingFaceTranslationModel(BaseTranslationModel):
             decoded_preds = self.tokenizer.batch_decode(preds, skip_special_tokens=True)
 
             labels = np.where(labels != -100, labels, self.tokenizer.pad_token_id)
-            decoded_labels = self.tokenizer.batch_decode(labels, skip_special_tokens=True)
-            decoded_preds, decoded_labels = self.postprocess_text(decoded_preds, decoded_labels)
-            result = metric.compute(predictions=decoded_preds, references=decoded_labels)   
+            decoded_labels = self.tokenizer.batch_decode(
+                labels, skip_special_tokens=True
+            )
+            decoded_preds, decoded_labels = self.postprocess_text(
+                decoded_preds, decoded_labels
+            )
+            result = metric.compute(
+                predictions=decoded_preds, references=decoded_labels
+            )
             result = {"bleu": result["score"]}
-            prediction_lens = [np.count_nonzero(pred != self.tokenizer.pad_token_id) for pred in preds]
+            prediction_lens = [
+                np.count_nonzero(pred != self.tokenizer.pad_token_id) for pred in preds
+            ]
             result["gen_len"] = np.mean(prediction_lens)
             result = {k: round(v, 4) for k, v in result.items()}
             return result
-        
+
         trainer = Seq2SeqTrainer(
             self.model,
             args=args,
@@ -144,15 +164,14 @@ class HuggingFaceTranslationModel(BaseTranslationModel):
             eval_dataset=tokenized_datasets["validation"],
             data_collator=data_collator,
             tokenizer=self.tokenizer,
-            compute_metrics=compute_metrics
+            compute_metrics=compute_metrics,
         )
+        print(f"Beginning training model {self.model_name}...")
         trainer.train()
         if self.save_to_disk:
             train_config.save(os.path.join(self.dir_path, "train_config.json"))
             trainer.save_model(self.dir_path)
         self.model.to(torch.device("cpu"))
-
-
 
     def save_args(self):
         filename = os.path.join(self.dir_path, "args.json")
@@ -167,11 +186,13 @@ class HuggingFaceTranslationModel(BaseTranslationModel):
                 "max_target_length": self.max_target_length,
             }
             json.dump(info, f)
-        
 
     @classmethod
-    def from_pretrained(cls, path):
+    def from_pretrained(cls, path, checkpoint=None):
         args = json.load(open(os.path.join(path, "args.json")))
+
+        if checkpoint:
+            path = os.path.join(path, f"checkpoint-{checkpoint}")
 
         tokenizer = AutoTokenizer.from_pretrained(path)
         model: AutoModelForSeq2SeqLM = AutoModelForSeq2SeqLM.from_pretrained(path)
