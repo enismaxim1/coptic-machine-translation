@@ -1,12 +1,19 @@
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
 from collections import defaultdict
 import json
 import os
 import random
-from typing import Dict, List
+from typing import DefaultDict, Dict, List
+import torch
 from transformers import BertTokenizer, AutoTokenizer
+from huggingface_model import HuggingFaceTranslationModel
+from base_model import BaseTranslationModel
 import datasets
 from datasets import Dataset, DatasetDict
 from tqdm import tqdm
+import pandas as pd
 from trie import Trie
 
 
@@ -103,13 +110,21 @@ def generate_synthetic_data(
 
     for split in dataset_dict:
         dataset_split = dataset_dict[split]
-        reduced_dataset_dict[split] = datasets.Dataset.from_dict(dataset_split[:max_dataset_size])
+        reduced_dataset_dict[split] = datasets.Dataset.from_dict(
+            dataset_split[:max_dataset_size]
+        )
 
     def apply_substitutions(sentence):
         curr_index = 0
         while curr_index < len(sentence):
-            word, largest_substitution = trie.find_largest_substitution(sentence, curr_index)
-            sentence = sentence[:curr_index] + largest_substitution + sentence[curr_index + len(word):]
+            word, largest_substitution = trie.find_largest_substitution(
+                sentence, curr_index
+            )
+            sentence = (
+                sentence[:curr_index]
+                + largest_substitution
+                + sentence[curr_index + len(word) :]
+            )
             curr_index += len(largest_substitution) + 1
         return sentence
 
@@ -133,42 +148,42 @@ def generate_caesered_data(
 
     caeser_map = {c: chr(ord(c) + num_shifts) for c in ascii_lowercase}
     caesered_data = generate_synthetic_data(
-        language,
-        dataset_dict,
-        max_dataset_size,
-        caeser_map
+        language, dataset_dict, max_dataset_size, caeser_map
     )
     for split in caesered_data:
         caesered_data[split].to_json(
             f"datasets/{num_shifts}_caesered_{language}-en/{split}/translations.json"
         )
 
-def generate_vowel_shifted_data(
-    language: str, dataset_dict, max_dataset_size: int
-):
+
+def generate_vowel_shifted_data(language: str, dataset_dict, max_dataset_size: int):
     """
     Perform caeser cipher on a dataset, and save to json.
     """
-    lower_vowels = ['a', 'e', 'i', 'o', 'u', 'é']
+    lower_vowels = ["a", "e", "i", "o", "u", "é"]
     upper_vowels = [vowel.upper() for vowel in lower_vowels]
     vowel_map = {
-        vowel: lower_vowels[(i + 1) % len(lower_vowels)] for i, vowel in enumerate(lower_vowels)
+        vowel: lower_vowels[(i + 1) % len(lower_vowels)]
+        for i, vowel in enumerate(lower_vowels)
     }
-    vowel_map.update({
-        vowel: upper_vowels[(i + 1) % len(upper_vowels)] for i, vowel in enumerate(upper_vowels)
-    })
+    vowel_map.update(
+        {
+            vowel: upper_vowels[(i + 1) % len(upper_vowels)]
+            for i, vowel in enumerate(upper_vowels)
+        }
+    )
     shifted_data = generate_synthetic_data(
-        language,
-        dataset_dict,
-        max_dataset_size,
-        vowel_map
+        language, dataset_dict, max_dataset_size, vowel_map
     )
     for split in shifted_data:
         shifted_data[split].to_json(
             f"datasets/vowel_shifted_{language}-en/{split}/translations.json"
         )
 
-def get_most_frequent(language: str, dataset_dict: DatasetDict, max_dataset_size: int,  tokenizer):
+
+def get_most_frequent(
+    language: str, dataset_dict: DatasetDict, max_dataset_size: int, tokenizer
+):
     """Return the tokens in a dataset, sorted by greatest to least frequency."""
     token_freq_map = defaultdict(int)
     for split in dataset_dict:
@@ -184,7 +199,10 @@ def get_most_frequent(language: str, dataset_dict: DatasetDict, max_dataset_size
                 token_freq_map[text_token] += 1
     return sorted(token_freq_map, key=token_freq_map.get, reverse=True)
 
-def get_prefix_tokens(language: str, dataset, max_dataset_size: int, tokenizer, max_num=1000):
+
+def get_prefix_tokens(
+    language: str, dataset, max_dataset_size: int, tokenizer, max_num=1000
+):
     seen_tokens = []
     prefixes = []
     most_frequent = get_most_frequent(language, dataset, max_dataset_size, tokenizer)
@@ -199,36 +217,30 @@ def get_prefix_tokens(language: str, dataset, max_dataset_size: int, tokenizer, 
         seen_tokens.append(token)
     # json.dump(prefixes, open(f"datasets/{language}_prefixes.json", "w"))
     import json
+
     json.dump(prefixes, open(f"datasets/{language}_prefixes.json", "w"))
     return prefixes
 
 
-def generate_common_token_split_data_files(language: str, dataset_dict, max_dataset_size: int):
-    data_map = {
-        'sont': 's ont',
-        'peut': 'peu t'
-    }
+def generate_common_token_split_data_files(
+    language: str, dataset_dict, max_dataset_size: int
+):
+    data_map = {"sont": "s ont", "peut": "peu t"}
     common_token_split_data = generate_synthetic_data(
-        language,
-        dataset_dict,
-        max_dataset_size,
-        data_map
+        language, dataset_dict, max_dataset_size, data_map
     )
     for split in common_token_split_data:
         common_token_split_data[split].to_json(
             f"datasets/common_token_split_{language}-en/{split}/translations.json"
         )
 
-def generate_common_token_shuffled_data_files(language: str, dataset_dict, max_dataset_size: int):
-    data_map = {
-        'sont': 'peut',
-        'peut': 'sont'
-    }
+
+def generate_common_token_shuffled_data_files(
+    language: str, dataset_dict, max_dataset_size: int
+):
+    data_map = {"sont": "peut", "peut": "sont"}
     common_token_split_data = generate_synthetic_data(
-        language,
-        dataset_dict,
-        max_dataset_size,
-        data_map
+        language, dataset_dict, max_dataset_size, data_map
     )
     for split in common_token_split_data:
         common_token_split_data[split].to_json(
@@ -236,9 +248,17 @@ def generate_common_token_shuffled_data_files(language: str, dataset_dict, max_d
         )
 
 
-def generate_shuffled_most_common(language: str, dataset_dict, max_dataset_size: int, tokenizer, num_shuffled = 1000, p_split = 0):
-    
-    most_frequent = get_most_frequent(language, dataset_dict, max_dataset_size, tokenizer)
+def generate_shuffled_most_common(
+    language: str,
+    dataset_dict,
+    max_dataset_size: int,
+    tokenizer,
+    num_shuffled=1000,
+    p_split=0,
+):
+    most_frequent = get_most_frequent(
+        language, dataset_dict, max_dataset_size, tokenizer
+    )
     most_frequent = most_frequent[:num_shuffled]
     to_shuffle = []
     for token in most_frequent:
@@ -256,10 +276,7 @@ def generate_shuffled_most_common(language: str, dataset_dict, max_dataset_size:
             split = random.randint(1, len(v) - 1)
             data_map[k] = v[:split] + " " + v[split:]
     shuffled_most_common = generate_synthetic_data(
-        language,
-        dataset_dict,
-        max_dataset_size,
-        data_map
+        language, dataset_dict, max_dataset_size, data_map
     )
     for split in shuffled_most_common:
         shuffled_most_common[split].to_json(
@@ -267,9 +284,17 @@ def generate_shuffled_most_common(language: str, dataset_dict, max_dataset_size:
         )
 
 
-def generate_split_most_common(language: str, dataset_dict, max_dataset_size: int, tokenizer, num_shuffled = 1000, num_split = 100):
-    
-    most_frequent = get_most_frequent(language, dataset_dict, max_dataset_size, tokenizer)
+def generate_split_most_common(
+    language: str,
+    dataset_dict,
+    max_dataset_size: int,
+    tokenizer,
+    num_shuffled=1000,
+    num_split=100,
+):
+    most_frequent = get_most_frequent(
+        language, dataset_dict, max_dataset_size, tokenizer
+    )
     most_frequent = most_frequent[:num_shuffled]
     to_split = set(most_frequent[:num_split])
     to_shuffle = []
@@ -288,10 +313,7 @@ def generate_split_most_common(language: str, dataset_dict, max_dataset_size: in
             split = random.randint(1, len(v) - 1)
             data_map[k] = v[:split] + " " + v[split:]
     shuffled_most_common = generate_synthetic_data(
-        language,
-        dataset_dict,
-        max_dataset_size,
-        data_map
+        language, dataset_dict, max_dataset_size, data_map
     )
     for split in shuffled_most_common:
         shuffled_most_common[split].to_json(
@@ -433,7 +455,9 @@ def load_dataset(data_dir: str, translation_task: str, split=None, **kwargs):
         dataset = datasets.load_dataset("json", data_files=data_files, split=split)
 
     except FileNotFoundError:
-        dataset = datasets.load_dataset(data_dir, translation_task, split=split, **kwargs)
+        dataset = datasets.load_dataset(
+            data_dir, translation_task, split=split, **kwargs
+        )
 
     if split is None:
         for split in splits:
@@ -441,3 +465,161 @@ def load_dataset(data_dir: str, translation_task: str, split=None, **kwargs):
     dataset.data_dir = data_dir
 
     return dataset
+
+
+# def compute_confidence(translation_model: HuggingFaceTranslationModel, src_sentence: str, tgt_sentence: str):
+#     """
+#     Computes average likehood of predicting target from source, as defined in https://aclanthology.org/2022.findings-emnlp.540.pdf.
+#     """
+#     model = translation_model.model
+#     tokenizer = translation_model.tokenizer
+#     inputs = tokenizer(src_sentence, return_tensors="pt", add_special_tokens=True)
+
+#     # Generate decoder_input_ids which is usually the start token for the decoder
+#     decoder_start_token = tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
+#     decoder_input_ids = torch.full(
+#         (inputs["input_ids"].shape[0], 1),
+#         decoder_start_token,
+#         dtype=torch.long,
+#         device=next(model.parameters()).device
+#     )
+#     model.eval()
+#     with torch.no_grad():
+
+#         outputs = model(**inputs, decoder_input_ids=decoder_input_ids)
+#         logits = outputs.logits
+#         probs = logits.softmax(dim=-1)
+
+#         # tokenize target sentence
+#         tgt_tokens = tokenizer(tgt_sentence, return_tensors="pt", add_special_tokens=True)["input_ids"]
+
+
+def compute_confidence(
+    translation_model: HuggingFaceTranslationModel, src_sentence: str, tgt_sentence: str
+):
+    model = translation_model.model
+    tokenizer = translation_model.tokenizer
+    device = next(model.parameters()).device
+
+    # Tokenize the source and target sentences
+    inputs = tokenizer(src_sentence, return_tensors="pt", add_special_tokens=True).to(
+        device
+    )
+    target_tokens = tokenizer(
+        text_target=tgt_sentence, return_tensors="pt", add_special_tokens=True
+    ).input_ids.to(device)
+
+    # We want to calculate the probability of each target token given the previous ones, so we create a sequence of decoder_input_ids
+    # that starts with the start token and then includes all but the last token of the target sentence
+    decoder_input_ids = torch.full(
+        (1, 1), tokenizer.pad_token_id, dtype=torch.long, device=device
+    )
+
+    model.eval()  # Put the model in evaluation mode
+    with torch.no_grad():  # Turn off gradients to save memory and computations
+        total_prob = 0.0
+        for i in range(target_tokens.size(1)):
+            # Pass the current sequence to the model
+            outputs = model(
+                input_ids=inputs["input_ids"], decoder_input_ids=decoder_input_ids
+            )
+            logits = outputs.logits
+            probs = logits.softmax(dim=-1)
+            # Select the probability of the true next token
+            next_token_id = target_tokens[0, i].unsqueeze(0)  # [1, 1]
+            next_token_prob = probs[0, -1, :][next_token_id]
+            total_prob += next_token_prob
+            # Update the decoder_input_ids to include the true next token
+            decoder_input_ids = torch.cat(
+                [decoder_input_ids, next_token_id.unsqueeze(0)], dim=1
+            )
+
+        # Calculate the average probability
+        avg_prob = total_prob / (target_tokens.size(1))
+
+    return float(avg_prob)
+
+
+def compute_all_confidence(
+    model_path: str,
+    dataset: Dataset,
+    src_language: str,
+    tgt_language: str,
+    max_num=500,
+    max_num_epochs=16,
+    include_base=False,
+) -> DefaultDict[int, float]:
+    """Computes a list of confidence scores for each checkpoint in a model directory."""
+    # sample random selection from dataset
+
+    all_confidences = defaultdict(list)
+
+    checkpoints = list(
+        sorted(
+            checkpoint.split("checkpoint-")[1]
+            for checkpoint in os.listdir(model_path)
+            if checkpoint.startswith("checkpoint-")
+        )
+    )
+    if max_num_epochs:
+        checkpoints = checkpoints[:max_num_epochs]
+    if include_base:
+        checkpoints.append(None)
+    for checkpoint in checkpoints:
+        model = HuggingFaceTranslationModel.from_pretrained(
+            model_path, checkpoint=checkpoint
+        )
+        for index, row in enumerate(tqdm(dataset["translation"], total=min(max_num, len(dataset["translation"])))):
+            if index >= max_num:
+                break
+            all_confidences[index].append(
+                compute_confidence(model, row[src_language], row[tgt_language])
+            )
+
+    return all_confidences
+
+
+def get_confidence_dataframe(
+    model_path: str,
+    dataset: Dataset,
+    src_language: str,
+    tgt_language: str,
+    **kwargs,
+):
+    """Computes a list of confidence scores for each checkpoint in a model directory."""
+    # sample random selection from dataset
+
+    confidence_dict = compute_all_confidence(
+        model_path, dataset, src_language, tgt_language, **kwargs
+    )
+    df_dict = {"src": [], "tgt": [], "confidence": [], "variability": []}
+    for index, confidences in confidence_dict.items():
+        src_sentence = dataset[index]["translation"][src_language]
+        tgt_sentence = dataset[index]["translation"][tgt_language]
+        confidences = confidence_dict[index]
+        confidence = np.mean(confidences)
+        stdev = np.std(confidences)
+        df_dict["src"].append(src_sentence)
+        df_dict["tgt"].append(tgt_sentence)
+        df_dict["confidence"].append(confidence)
+        df_dict["variability"].append(stdev)
+    return pd.DataFrame(df_dict)
+
+
+def plot_dataset(df: pd.DataFrame):
+    # Plotting the points
+    plt.figure(figsize=(10, 6))
+    plt.scatter(df["variability"], df["confidence"], color="blue", label="data")
+
+    # Adding title and labels
+    plt.title("Confidence and Variability by Index")
+    plt.xlabel("Variability")
+    plt.ylabel("Confidence")
+    plt.legend()
+    plt.xlim(0, 1)
+    plt.ylim(0, 1)
+    plt.grid(True)
+
+    # Display the plot
+    plt.show()
+    plt.savefig("confidence.png")

@@ -27,7 +27,7 @@ class HuggingFaceTranslationModelTrainingConfig:
     per_device_train_batch_size: int = 32
     per_device_eval_batch_size: int = 32
     weight_decay: float = 0.01
-    save_total_limit: int = 3
+    save_total_limit: int = 8
     num_train_epochs: int = 1
     predict_with_generate: bool = True
     eval_steps: int = 16000
@@ -123,10 +123,9 @@ class HuggingFaceTranslationModel(BaseTranslationModel):
             predict_with_generate=train_config.predict_with_generate,
             eval_steps=train_config.eval_steps,
             logging_steps=train_config.logging_steps,
-            save_strategy="steps" if self.save_to_disk else "no",
+            save_strategy="epoch" if self.save_to_disk else "no",
         )
 
-        print("created argumnets")
 
         data_collator = DataCollatorForSeq2Seq(
             self.tokenizer, model=self.model, return_tensors="pt"
