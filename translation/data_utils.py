@@ -436,7 +436,15 @@ def set_translation_json(data_dir, src_language: str, tgt_language: str):
             json.dump(translations, f)
 
 
-def load_dataset(data_dir: str, translation_task: str, split=None, **kwargs):
+def load_dataset(
+    data_dir: str,
+    translation_task: str,
+    split=None,
+    max_train_size: int = None,
+    max_validation_size: int = None,
+    max_test_size: int = None,
+    **kwargs,
+):
     """
     Custom load dataset function replacing the HuggingFace load_dataset.
     data_dir: path to directory containing train, validation, and test files.
@@ -455,43 +463,25 @@ def load_dataset(data_dir: str, translation_task: str, split=None, **kwargs):
         dataset = datasets.load_dataset("json", data_files=data_files, split=split)
 
     except FileNotFoundError:
-        dataset = datasets.load_dataset(
-            data_dir, translation_task, split=split, **kwargs
-        )
+        try:
+            dataset = datasets.load_dataset(
+                data_dir, translation_task, split=split, **kwargs
+            )
+        except:
+            dataset = datasets.load_from_disk(data_dir)
 
     if split is None:
         for split in splits:
+            if split == "train" and max_train_size:
+                dataset[split] = dataset[split].select(range(max_train_size))
+            if split == "validation" and max_validation_size:
+                dataset[split] = dataset[split].select(range(max_validation_size))
+            if split == "test" and max_test_size:
+                dataset[split] = dataset[split].select(range(max_test_size))
             dataset[split].data_dir = data_dir
     dataset.data_dir = data_dir
 
     return dataset
-
-
-# def compute_confidence(translation_model: HuggingFaceTranslationModel, src_sentence: str, tgt_sentence: str):
-#     """
-#     Computes average likehood of predicting target from source, as defined in https://aclanthology.org/2022.findings-emnlp.540.pdf.
-#     """
-#     model = translation_model.model
-#     tokenizer = translation_model.tokenizer
-#     inputs = tokenizer(src_sentence, return_tensors="pt", add_special_tokens=True)
-
-#     # Generate decoder_input_ids which is usually the start token for the decoder
-#     decoder_start_token = tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
-#     decoder_input_ids = torch.full(
-#         (inputs["input_ids"].shape[0], 1),
-#         decoder_start_token,
-#         dtype=torch.long,
-#         device=next(model.parameters()).device
-#     )
-#     model.eval()
-#     with torch.no_grad():
-
-#         outputs = model(**inputs, decoder_input_ids=decoder_input_ids)
-#         logits = outputs.logits
-#         probs = logits.softmax(dim=-1)
-
-#         # tokenize target sentence
-#         tgt_tokens = tokenizer(tgt_sentence, return_tensors="pt", add_special_tokens=True)["input_ids"]
 
 
 def compute_confidence(
@@ -540,6 +530,56 @@ def compute_confidence(
     return float(avg_prob)
 
 
+def compute_scaled_probability(
+    translation_model: HuggingFaceTranslationModel, src_sentence: str, tgt_sentence: str
+):
+    """
+    Computes the probability of the model predicting the source sequence given the target sequence, scaled
+    by the number of tokens in the target sequence.
+    """
+    model = translation_model.model
+    tokenizer = translation_model.tokenizer
+    device = next(model.parameters()).device
+
+    # Tokenize the source and target sentences
+    inputs = tokenizer(src_sentence, return_tensors="pt", add_special_tokens=True).to(
+        device
+    )
+    target_tokens = tokenizer(
+        text_target=tgt_sentence, return_tensors="pt", add_special_tokens=True
+    ).input_ids.to(device)
+
+    # We want to calculate the probability of each target token given the previous ones, so we create a sequence of decoder_input_ids
+    # that starts with the start token and then includes all but the last token of the target sentence
+    decoder_input_ids = torch.full(
+        (1, 1), tokenizer.pad_token_id, dtype=torch.long, device=device
+    )
+
+    model.eval()  # Put the model in evaluation mode
+    with torch.no_grad():  # Turn off gradients to save memory and computations
+        neg_log_likelihood = 0.0
+        for i in range(target_tokens.size(1)):
+            # Pass the current sequence to the model
+            outputs = model(
+                input_ids=inputs["input_ids"], decoder_input_ids=decoder_input_ids
+            )
+            logits = outputs.logits
+            probs = logits.softmax(dim=-1)
+            # Select the probability of the true next token
+            next_token_id = target_tokens[0, i].unsqueeze(0)  # [1, 1]
+            next_token_prob = probs[0, -1, :][next_token_id]
+            neg_log_likelihood += -np.log2(next_token_prob)
+            # Update the decoder_input_ids to include the true next token
+            decoder_input_ids = torch.cat(
+                [decoder_input_ids, next_token_id.unsqueeze(0)], dim=1
+            )
+
+        # Calculate the average probability
+        mean_log_likelihood = neg_log_likelihood / (target_tokens.size(1))
+
+    return np.exp(-mean_log_likelihood)
+
+
 def compute_all_confidence(
     model_path: str,
     dataset: Dataset,
@@ -548,10 +588,11 @@ def compute_all_confidence(
     max_num=500,
     max_num_epochs=16,
     include_base=False,
+    confidence_func=compute_confidence,
 ) -> DefaultDict[int, float]:
     """Computes a list of confidence scores for each checkpoint in a model directory."""
     # sample random selection from dataset
-
+    print("computing confidences...")
     all_confidences = defaultdict(list)
 
     checkpoints = list(
@@ -561,6 +602,7 @@ def compute_all_confidence(
             if checkpoint.startswith("checkpoint-")
         )
     )
+    print(f"found checkpoints: {checkpoints}")
     if max_num_epochs:
         checkpoints = checkpoints[:max_num_epochs]
     if include_base:
@@ -569,11 +611,14 @@ def compute_all_confidence(
         model = HuggingFaceTranslationModel.from_pretrained(
             model_path, checkpoint=checkpoint
         )
-        for index, row in enumerate(tqdm(dataset["translation"], total=min(max_num, len(dataset["translation"])))):
+        translations = dataset.select(range(max_num))["translation"]
+        print("Translations loaded...", flush=True)
+        for index, row in enumerate(translations):
+            print(index, flush=True)
             if index >= max_num:
                 break
             all_confidences[index].append(
-                compute_confidence(model, row[src_language], row[tgt_language])
+                confidence_func(model, row[src_language], row[tgt_language])
             )
 
     return all_confidences
@@ -588,7 +633,7 @@ def get_confidence_dataframe(
 ):
     """Computes a list of confidence scores for each checkpoint in a model directory."""
     # sample random selection from dataset
-
+    print("computing df...")
     confidence_dict = compute_all_confidence(
         model_path, dataset, src_language, tgt_language, **kwargs
     )
