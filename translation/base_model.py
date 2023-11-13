@@ -91,6 +91,12 @@ class BaseTranslationModel:
         raise NotImplementedError()
 
     def _hash_data_with_config(self, test_dataset, config):
+        sha = sha256()
+        sha.update(test_dataset._fingerprint.encode("utf-8"))
+        sha.update(config.hash_fields().encode("utf-8"))
+        return sha.hexdigest()[:8]
+
+    def _old_hash_data_with_config(self, test_dataset, config, use_old_hash=False):
         data_cache_files = test_dataset.cache_files
         sha = sha256()
         for data_cache_file in data_cache_files:
@@ -115,11 +121,20 @@ class BaseTranslationModel:
         print(f"Computing translations from {self.src_language}-{self.tgt_language}.")
         self._apply_kwargs(config, **kwargs)
 
+        # backwards compatibility: look for old hash as well
+        old_hash = self._old_hash_data_with_config(test_dataset, config)
         config_hash = self._hash_data_with_config(test_dataset, config)
 
         data_dir = os.path.join(self.dir_path, "data", config_hash)
         if not os.path.exists(data_dir):
-            os.makedirs(data_dir)
+            # if old hash path exists, rename to new hash path
+            old_dir = os.path.join(self.dir_path, "data", old_hash)
+            if not os.path.exists(old_dir):
+                os.makedirs(data_dir)
+            else:
+                # rename
+                print(f"Renaming f{old_dir} to {data_dir}")
+                os.rename(old_dir, data_dir)
 
         translation_file = os.path.join(data_dir, f"translations.{self.tgt_language}")
 
