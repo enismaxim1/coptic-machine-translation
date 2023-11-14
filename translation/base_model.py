@@ -67,16 +67,17 @@ class BaseTranslationModel:
         self.src_language = src_language
         self.tgt_language = tgt_language
         self.model = model
-        self.dir_path = os.path.join(
-            "models", f"{model_name}-{src_language}-{tgt_language}/"
-        )
-        # Prevent overwriting the model if it already exists.
-        if os.path.exists(self.dir_path) and save_to_disk:
-            raise FileExistsError(
-                f"Model {model_name} at path {self.dir_path} already exists. Did you mean to load using from_pretrained?"
+        if save_to_disk:
+            self.dir_path = os.path.join(
+                "models", f"{model_name}-{src_language}-{tgt_language}/"
             )
-        if not os.path.exists(self.dir_path):
-            os.makedirs(self.dir_path)
+            # Prevent overwriting the model if it already exists.
+            if os.path.exists(self.dir_path):
+                raise FileExistsError(
+                    f"Model {model_name} at path {self.dir_path} already exists. Did you mean to load using from_pretrained?"
+                )
+            if not os.path.exists(self.dir_path):
+                os.makedirs(self.dir_path)
 
         self.save_to_disk = save_to_disk
 
