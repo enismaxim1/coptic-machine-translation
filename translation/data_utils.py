@@ -592,17 +592,16 @@ def compute_all_confidence(
 ) -> DefaultDict[int, float]:
     """Computes a list of confidence scores for each checkpoint in a model directory."""
     # sample random selection from dataset
-    print("computing confidences...")
     all_confidences = defaultdict(list)
 
     checkpoints = list(
         sorted(
-            checkpoint.split("checkpoint-")[1]
+            int(checkpoint.split("checkpoint-")[1])
             for checkpoint in os.listdir(model_path)
             if checkpoint.startswith("checkpoint-")
         )
     )
-    print(f"found checkpoints: {checkpoints}")
+    print(f"Found checkpoints: {checkpoints}")
     if max_num_epochs:
         checkpoints = checkpoints[:max_num_epochs]
     if include_base:
@@ -612,11 +611,8 @@ def compute_all_confidence(
             model_path, checkpoint=checkpoint
         )
         translations = dataset.select(range(max_num))["translation"]
-        print("Translations loaded...", flush=True)
-        for index, row in enumerate(translations):
-            print(index, flush=True)
-            if index >= max_num:
-                break
+        print(f"Checkpoint {checkpoint} loaded...", flush=True)
+        for index, row in enumerate(tqdm(translations)):
             all_confidences[index].append(
                 confidence_func(model, row[src_language], row[tgt_language])
             )
@@ -626,14 +622,14 @@ def compute_all_confidence(
 
 def get_confidence_dataframe(
     model_path: str,
-    dataset: Dataset,
+    dataset: Dataset, 
     src_language: str,
     tgt_language: str,
+    save_to_disk = True,
     **kwargs,
 ):
     """Computes a list of confidence scores for each checkpoint in a model directory."""
     # sample random selection from dataset
-    print("computing df...")
     confidence_dict = compute_all_confidence(
         model_path, dataset, src_language, tgt_language, **kwargs
     )
@@ -648,7 +644,16 @@ def get_confidence_dataframe(
         df_dict["tgt"].append(tgt_sentence)
         df_dict["confidence"].append(confidence)
         df_dict["variability"].append(stdev)
-    return pd.DataFrame(df_dict)
+    
+    df = pd.DataFrame(df_dict)
+    if save_to_disk:
+        df_dir = os.path.join(model_path, "dataframes")
+        if not os.path.isdir(df_dir):
+            os.makedirs(df_dir)
+        with open(os.path.join(df_dir, "df_config.json"), 'w') as f:
+            json.dump(kwargs, f)
+        df.to_csv(os.path.join(df_dir, "confidence_df.csv"))
+    return df
 
 
 def plot_dataset(df: pd.DataFrame):
