@@ -529,6 +529,51 @@ def compute_confidence(
 
     return float(avg_prob)
 
+def compute_probability(
+    translation_model: HuggingFaceTranslationModel, src_sentence: str, tgt_sentence: str
+):
+    """
+    Computes the probability of the model predicting the source sequence given the target sequence.
+    """
+    model = translation_model.model
+    tokenizer = translation_model.tokenizer
+    device = next(model.parameters()).device
+
+    # Tokenize the source and target sentences
+    inputs = tokenizer(src_sentence, return_tensors="pt", add_special_tokens=True).to(
+        device
+    )
+    target_tokens = tokenizer(
+        text_target=tgt_sentence, return_tensors="pt", add_special_tokens=True
+    ).input_ids.to(device)
+
+    # We want to calculate the probability of each target token given the previous ones, so we create a sequence of decoder_input_ids
+    # that starts with the start token and then includes all but the last token of the target sentence
+    decoder_input_ids = torch.full(
+        (1, 1), tokenizer.pad_token_id, dtype=torch.long, device=device
+    )
+
+    model.eval()  # Put the model in evaluation mode
+    with torch.no_grad():  # Turn off gradients to save memory and computations
+        neg_log_likelihood = 0.0
+        for i in range(target_tokens.size(1)):
+            # Pass the current sequence to the model
+            outputs = model(
+                input_ids=inputs["input_ids"], decoder_input_ids=decoder_input_ids
+            )
+            logits = outputs.logits
+            probs = logits.softmax(dim=-1)
+            # Select the probability of the true next token
+            next_token_id = target_tokens[0, i].unsqueeze(0)  # [1, 1]
+            next_token_prob = probs[0, -1, :][next_token_id]
+            neg_log_likelihood += -np.log2(next_token_prob)
+            # Update the decoder_input_ids to include the true next token
+            decoder_input_ids = torch.cat(
+                [decoder_input_ids, next_token_id.unsqueeze(0)], dim=1
+            )
+
+    return np.exp(-neg_log_likelihood)
+
 
 def compute_scaled_probability(
     translation_model: HuggingFaceTranslationModel, src_sentence: str, tgt_sentence: str
@@ -589,9 +634,9 @@ def compute_all_confidence(
     max_num_epochs=16,
     include_base=False,
     confidence_func=compute_confidence,
+    shuffle=True,
 ) -> DefaultDict[int, float]:
     """Computes a list of confidence scores for each checkpoint in a model directory."""
-    # sample random selection from dataset
     all_confidences = defaultdict(list)
 
     checkpoints = list(
@@ -601,6 +646,57 @@ def compute_all_confidence(
             if checkpoint.startswith("checkpoint-")
         )
     )
+    if shuffle:
+        dataset = dataset.shuffle()
+        print("Dataset shuffled...")
+    print(f"Found checkpoints: {checkpoints}")
+    if max_num_epochs:
+        checkpoints = checkpoints[:max_num_epochs]
+    if include_base:
+        checkpoints.append(None)
+    for checkpoint in checkpoints:
+        model = HuggingFaceTranslationModel.from_pretrained(
+            model_path, checkpoint=checkpoint
+        )
+        # sample get max_num from dataset
+        translations = dataset.select(range(max_num))["translation"]
+        print(f"Checkpoint {checkpoint} loaded...", flush=True)
+        for index, row in enumerate(tqdm(translations)):
+            all_confidences[index].append(
+                confidence_func(model, row[src_language], row[tgt_language])
+            )
+
+    return all_confidences
+
+
+def get_detailed_df(
+    model_path: str,
+    dataset: Dataset,
+    src_language: str,
+    tgt_language: str,
+    max_num=500,
+    max_num_epochs=16,
+    include_base=False,
+    shuffle=True,
+    confidence_func=compute_confidence,
+):
+    """
+    Returns a dataframe of all confidence scores for each checkpoint in a model directory, 
+    for each sentence in a dataset. Clips the number of sentences to max_num.
+    """
+    # sample random selection from dataset
+    result_dict = {"epoch": [], "src": [], "tgt": [], "confidence": []}
+
+    checkpoints = list(
+        sorted(
+            int(checkpoint.split("checkpoint-")[1])
+            for checkpoint in os.listdir(model_path)
+            if checkpoint.startswith("checkpoint-")
+        )
+    )
+    if shuffle:
+        dataset = dataset.shuffle()
+        print("Dataset shuffled...")
     print(f"Found checkpoints: {checkpoints}")
     if max_num_epochs:
         checkpoints = checkpoints[:max_num_epochs]
@@ -612,12 +708,16 @@ def compute_all_confidence(
         )
         translations = dataset.select(range(max_num))["translation"]
         print(f"Checkpoint {checkpoint} loaded...", flush=True)
-        for index, row in enumerate(tqdm(translations)):
-            all_confidences[index].append(
-                confidence_func(model, row[src_language], row[tgt_language])
-            )
-
-    return all_confidences
+        for translation in tqdm(translations):
+            # add row corresponding to confidence of translation
+            src_sentence = translation[src_language]
+            tgt_sentence = translation[tgt_language]
+            confidence = confidence_func(model, src_sentence, tgt_sentence)
+            result_dict["epoch"].append(checkpoint)
+            result_dict["src"].append(src_sentence)
+            result_dict["tgt"].append(tgt_sentence)
+            result_dict["confidence"].append(confidence)
+    return pd.DataFrame(result_dict)
 
 
 def get_confidence_dataframe(
@@ -647,11 +747,12 @@ def get_confidence_dataframe(
     
     df = pd.DataFrame(df_dict)
     if save_to_disk:
-        df_dir = os.path.join(model_path, "dataframes")
+        confidence_func = kwargs["confidence_func"].__name__ if "confidence_func" in kwargs else "compute_confidence"
+        df_dir = os.path.join(model_path, f"dataframes_{confidence_func}")
+        while os.path.exists(df_dir):
+            df_dir = df_dir + "(copy)"
         if not os.path.isdir(df_dir):
             os.makedirs(df_dir)
-        with open(os.path.join(df_dir, "df_config.json"), 'w') as f:
-            json.dump(kwargs, f)
         df.to_csv(os.path.join(df_dir, "confidence_df.csv"))
     return df
 
