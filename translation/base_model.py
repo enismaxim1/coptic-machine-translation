@@ -67,16 +67,17 @@ class BaseTranslationModel:
         self.src_language = src_language
         self.tgt_language = tgt_language
         self.model = model
-        self.dir_path = os.path.join(
-            "models", f"{model_name}-{src_language}-{tgt_language}/"
-        )
-        # Prevent overwriting the model if it already exists.
-        if os.path.exists(self.dir_path) and save_to_disk:
-            raise FileExistsError(
-                f"Model {model_name} at path {self.dir_path} already exists. Did you mean to load using from_pretrained?"
+        if save_to_disk:
+            self.dir_path = os.path.join(
+                "models", f"{model_name}-{src_language}-{tgt_language}/"
             )
-        if not os.path.exists(self.dir_path):
-            os.makedirs(self.dir_path)
+            # Prevent overwriting the model if it already exists.
+            if os.path.exists(self.dir_path):
+                raise FileExistsError(
+                    f"Model {model_name} at path {self.dir_path} already exists. Did you mean to load using from_pretrained?"
+                )
+            if not os.path.exists(self.dir_path):
+                os.makedirs(self.dir_path)
 
         self.save_to_disk = save_to_disk
 
@@ -91,6 +92,12 @@ class BaseTranslationModel:
         raise NotImplementedError()
 
     def _hash_data_with_config(self, test_dataset, config):
+        sha = sha256()
+        sha.update(test_dataset._fingerprint.encode("utf-8"))
+        sha.update(config.hash_fields().encode("utf-8"))
+        return sha.hexdigest()[:8]
+
+    def _old_hash_data_with_config(self, test_dataset, config, use_old_hash=False):
         data_cache_files = test_dataset.cache_files
         sha = sha256()
         for data_cache_file in data_cache_files:
@@ -115,11 +122,20 @@ class BaseTranslationModel:
         print(f"Computing translations from {self.src_language}-{self.tgt_language}.")
         self._apply_kwargs(config, **kwargs)
 
+        # backwards compatibility: look for old hash as well
+        old_hash = self._old_hash_data_with_config(test_dataset, config)
         config_hash = self._hash_data_with_config(test_dataset, config)
 
         data_dir = os.path.join(self.dir_path, "data", config_hash)
         if not os.path.exists(data_dir):
-            os.makedirs(data_dir)
+            # if old hash path exists, rename to new hash path
+            old_dir = os.path.join(self.dir_path, "data", old_hash)
+            if not os.path.exists(old_dir):
+                os.makedirs(data_dir)
+            else:
+                # rename
+                print(f"Renaming f{old_dir} to {data_dir}")
+                os.rename(old_dir, data_dir)
 
         translation_file = os.path.join(data_dir, f"translations.{self.tgt_language}")
 

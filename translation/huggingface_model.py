@@ -110,7 +110,7 @@ class HuggingFaceTranslationModel(BaseTranslationModel):
     def train(
         self, dataset: Dataset, train_config: HuggingFaceTranslationModelTrainingConfig
     ):
-        tokenized_datasets = dataset.map(self.preprocess_function, batched=True)
+        tokenized_datasets = dataset.map(self.preprocess_function, batched=True, load_from_cache_file=False)
         args = Seq2SeqTrainingArguments(
             self.dir_path,
             evaluation_strategy=train_config.evaluation_strategy,
@@ -148,6 +148,9 @@ class HuggingFaceTranslationModel(BaseTranslationModel):
             result = metric.compute(
                 predictions=decoded_preds, references=decoded_labels
             )
+            print("Decoded labels:", decoded_labels[:10])
+            print("")
+            print("Using preds: ", decoded_preds[:10])
             result = {"bleu": result["score"]}
             prediction_lens = [
                 np.count_nonzero(pred != self.tokenizer.pad_token_id) for pred in preds
