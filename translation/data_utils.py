@@ -633,7 +633,7 @@ def compute_all_confidence(
     max_num=500,
     max_num_epochs=16,
     include_base=False,
-    confidence_func=compute_confidence,
+    confidence_func=compute_scaled_probability,
     shuffle=True,
 ) -> DefaultDict[int, float]:
     """Computes a list of confidence scores for each checkpoint in a model directory."""
@@ -678,7 +678,7 @@ def get_detailed_df(
     max_num_epochs=16,
     include_base=False,
     shuffle=True,
-    confidence_func=compute_confidence,
+    confidence_func=compute_scaled_probability,
 ):
     """
     Returns a dataframe of all confidence scores for each checkpoint in a model directory, 

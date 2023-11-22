@@ -50,6 +50,7 @@ def greedy_decode(model: EncoderDecoder, src: Tensor, src_mask: Tensor, max_len:
         ys = torch.cat(
             [ys, torch.zeros(1, 1).type_as(src.data).fill_(next_word)], dim=1
         )
+        
         if next_word == end_symbol:
             break
 

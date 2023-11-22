@@ -3,6 +3,7 @@ import os
 from attr import dataclass
 import numpy as np
 import torch
+from torch.nn.functional import softmax
 import evaluate
 import transformers
 from transformers import (
@@ -60,8 +61,9 @@ class HuggingFaceTranslationModel(BaseTranslationModel):
             tokenizer.save_pretrained(self.dir_path)
             model.save_pretrained(self.dir_path)
 
-    def translate(self, src_sentence: str, config: GenerationConfig):
+    def translate(self, src_sentence: str, config: GenerationConfig, output_confidence=False):
         inputs = self.tokenizer.encode(src_sentence, return_tensors="pt")
+        output_scores, return_dict_in_generate = output_confidence, output_confidence
         outputs = self.model.generate(
             inputs[:, : self.tokenizer.model_max_length],
             max_length=config.max_length,
@@ -72,8 +74,19 @@ class HuggingFaceTranslationModel(BaseTranslationModel):
             do_sample=config.do_sample,
             num_beams=config.num_beams,
             num_beam_groups=config.num_beam_groups,
+            output_scores=output_scores,
+            return_dict_in_generate=True
         )
-        translated_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+        translated_text = self.tokenizer.decode(outputs.sequences[0], skip_special_tokens=True)
+
+        if output_scores:
+            scores = outputs.scores
+            confidences = [softmax(score, dim=-1).max().item() for score in scores]
+            num_words = len(translated_text.split())
+            # scale the predicition probability by the number of words in the sentence
+            scaled_probability = np.exp(sum(np.log(confidences)) / num_words)
+            return translated_text, scaled_probability
+            
         return translated_text
 
     def preprocess_function(self, data):

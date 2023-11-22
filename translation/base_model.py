@@ -67,16 +67,16 @@ class BaseTranslationModel:
         self.src_language = src_language
         self.tgt_language = tgt_language
         self.model = model
+        self.dir_path = os.path.join(
+            "models", f"{model_name}-{src_language}-{tgt_language}/"
+        )
         if save_to_disk:
-            self.dir_path = os.path.join(
-                "models", f"{model_name}-{src_language}-{tgt_language}/"
-            )
             # Prevent overwriting the model if it already exists.
             if os.path.exists(self.dir_path):
                 raise FileExistsError(
                     f"Model {model_name} at path {self.dir_path} already exists. Did you mean to load using from_pretrained?"
                 )
-            if not os.path.exists(self.dir_path):
+            else:
                 os.makedirs(self.dir_path)
 
         self.save_to_disk = save_to_disk
@@ -118,7 +118,10 @@ class BaseTranslationModel:
         Takes a GenerationConfig as input, which can be used to configure the generation process.
         If a kwarg is passed, it will override the corresponding attribute in the config.
         """
-
+        if not isinstance(test_dataset, Dataset):
+            raise ValueError(
+                f"test_dataset must be of type Dataset, but got {type(test_dataset)}."
+            )
         print(f"Computing translations from {self.src_language}-{self.tgt_language}.")
         self._apply_kwargs(config, **kwargs)
 
@@ -205,6 +208,28 @@ class BaseTranslationModel:
             for language_pair in test_dataset["translation"]
         ]
         return sacrebleu.corpus_chrf(translations, [refs])
+    
+
+    def add_translations(self, test_dataset, config, **kwargs):
+        self._apply_kwargs(config, **kwargs)
+        # add translation column to dataset, including translation and sentence bleu
+        data_hash = self._hash_data_with_config(test_dataset, config)
+        translation_file = os.path.join(
+            self.dir_path, "data", data_hash, f"translations.{self.tgt_language}"
+        )
+        if not os.path.exists(translation_file):
+            print(
+                f"Could not find cached dataset at {translation_file}. Computing translations..."
+            )
+            self.translate_test_data(test_dataset, config)
+        # add translation column to dataset
+        translations = Path(translation_file).read_text().strip().split("\n")
+        test_dataset = test_dataset.map(lambda x: {"machine_translation": translations.pop(0)}, batched=False)
+        # add sentence bleu score to dataset
+        test_dataset = test_dataset.map(lambda x: {"sentence_bleu": sacrebleu.sentence_bleu(x["machine_translation"], [x["translation"][self.tgt_language]]).score})
+        return test_dataset
+
+
 
     def print_stats(self, test_dataset: Dataset):
         print(

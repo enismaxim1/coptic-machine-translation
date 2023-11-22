@@ -8,3 +8,4 @@ translation/translation.egg-info/
 models/
 train_jobs/
 **/.ipynb_checkpoints
+uroman/

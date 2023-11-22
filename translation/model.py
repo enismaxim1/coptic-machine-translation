@@ -32,6 +32,7 @@ from tokenizers.trainers import BpeTrainer
 from tokenizers.pre_tokenizers import Whitespace
 import GPUtil
 
+
 @dataclass
 class TranslationTrainingConfig:
     job_hash: str
@@ -112,10 +113,10 @@ class TranslationModel(BaseTranslationModel):
                 dropout,
                 model_max_len,
             )
+        if self.save_to_disk:
+            self.save_args()
 
-        self.save_args()
-
-    def translate(self, src_sentence: str, config = GenerationConfig()):
+    def translate(self, src_sentence: str, config=GenerationConfig()):
         if not src_sentence or src_sentence.isspace():
             return src_sentence
 
@@ -174,7 +175,7 @@ class TranslationModel(BaseTranslationModel):
             self._train_distributed_model(train_config)
         else:
             self._train_worker(0, dataset, 1, train_config, False)
-        self.model.to(torch.device('cpu'))
+        self.model.to(torch.device("cpu"))
 
     def save(self, train_config: TranslationTrainingConfig):
         self.save_model_info()
@@ -194,7 +195,7 @@ class TranslationModel(BaseTranslationModel):
         args = {
             "model_name": self.model_name,
             "src_language": self.src_language,
-            "tgt_language": self.tgt_language
+            "tgt_language": self.tgt_language,
         }
         with open(os.path.join(self.dir_path, "args.json"), "w") as f:
             json.dump(args, f)
@@ -215,14 +216,23 @@ class TranslationModel(BaseTranslationModel):
             json.dump(model_info, f)
 
     @classmethod
-    def from_pretrained(cls, path: str):
+    def from_pretrained(cls, path: str, checkpoint=None):
         print(f"Loading model from path {path}.")
         args = json.load(open(os.path.join(path, "args.json"), "r"))
-        src_tokenizer = AutoTokenizer.from_pretrained(os.path.join(path, "src_tokenizer"))
-        tgt_tokenizer = AutoTokenizer.from_pretrained(os.path.join(path, "tgt_tokenizer"))
+        src_tokenizer = AutoTokenizer.from_pretrained(
+            os.path.join(path, "src_tokenizer")
+        )
+        tgt_tokenizer = AutoTokenizer.from_pretrained(
+            os.path.join(path, "tgt_tokenizer")
+        )
         model_info = json.load(open(os.path.join(path, "model_info.json"), "r"))
         model = cls.make_model(**model_info)
-        model.load_state_dict(torch.load(os.path.join(path, "model_final.pt")))
+        pt_path = (
+            os.path.join(path, "model_final.pt")
+            if checkpoint is None
+            else os.path.join(path, "checkpoints", checkpoint + ".pt")
+        )
+        model.load_state_dict(torch.load(pt_path))
         return TranslationModel(
             args["model_name"],
             args["src_language"],
