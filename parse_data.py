@@ -37,8 +37,8 @@ def find_invalid(string: str):
         if c in illegal:
             return index, c
 
-def parse_data_to_csv(data_path: str):
-    data_dict = {"translation": [], "norm_group": [], "norm": [], "func": [], "pos": [], "arabic": [], "meta::translation": [], "meta::title": []}
+def parse_data_to_csv(data_path: str, out_path: str):
+    data_dict = {"translation": [], "norm_group": [], "norm": [], "func": [], "pos": [], "arabic": [], "meta::translation": [], "meta::title": [], "meta::source": [], "meta::corpus": []}
 
     with open(data_path) as f:
         data = f.read()
@@ -49,22 +49,24 @@ def parse_data_to_csv(data_path: str):
             row = {}
             for line in lines:
                 header, entry = line.strip().split("\t")
+                print(line)
                 row[header] = entry.strip()
                 
             for column in data_dict:
                 data_dict[column].append(row.get(column, None))
             
     df = pd.DataFrame(data_dict)
-    df.to_csv("raw_data.csv")
+    df.to_csv(out_path)
 
 def filter_bracketed_periods(df: pd.DataFrame):
     for col in ["norm", "norm_group", "translation"]:
         df = df[~df[col].str.contains(r"\[\.*\]", regex=True)]
     return df
 
-def filter_dots_and_ellipsis(df: pd.DataFrame):
+def filter_dots_and_ellipsis(df: pd.DataFrame, columns=["translation"]):
     pattern = r"(…)|(\.\.+)"
-    df = df[~df["translation"].str.contains(pattern, regex=True)]
+    for col in columns:
+        df = df[~df[col].str.contains(pattern, regex=True)]
     return df
 
 def replace_dots_and_ellipsis(df: pd.DataFrame):
@@ -109,6 +111,12 @@ def unnormalize(df: pd.DataFrame):
         return ''.join(c for c in string if c.isalnum())
     df = df.copy(deep=True)
     df["unnormalized"] = df["norm"].apply(unnormalize_string)
+    return df
+
+def align_periods(df: pd.DataFrame, columns: list[str]):
+    df = df.copy(deep=True)
+    for col in columns:
+        df[col] = df[col].str.replace(r" \. ", ". ", regex=True)
     return df
 
 def to_translation_json(df: pd.DataFrame, src_column, tgt_column, src_language, tgt_language):

@@ -9,3 +9,5 @@ models/
 train_jobs/
 **/.ipynb_checkpoints
 uroman/
+marian_tokenizer_stuff/
+romanized_coptic_tokenizer/
