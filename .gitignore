@@ -11,3 +11,4 @@ train_jobs/
 uroman/
 marian_tokenizer_stuff/
 romanized_coptic_tokenizer/
+tmp/
