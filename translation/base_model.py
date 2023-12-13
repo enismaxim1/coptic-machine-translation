@@ -32,6 +32,10 @@ class GenerationConfig:
     do_sample: bool = False
     num_beams: int = 1
     num_beam_groups: int = 1
+    top_k: int = 50
+    top_p: float = 0.95
+    temperature: float = 1.0
+    diversity_penalty: float = 0.0
 
     def save(
         self,

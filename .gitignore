@@ -4,6 +4,7 @@ datasets/
 *.err
 *.out
 *.log
+*.csv
 translation/translation.egg-info/
 models/
 train_jobs/
@@ -17,3 +18,4 @@ config.properties
 tmp/
 build/
 dist/
+logs/

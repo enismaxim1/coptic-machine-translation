@@ -17,7 +17,7 @@ from transformers import (
 )
 from datasets import Dataset
 from base_model import BaseTranslationModel, GenerationConfig
-from utils import get_git_revision_short_hash
+# from utils import get_git_revision_short_hash
 
 
 @dataclass
@@ -30,10 +30,11 @@ class HuggingFaceTranslationModelTrainingConfig:
     weight_decay: float = 0.01
     save_total_limit: int = 8
     num_train_epochs: int = 1
+    label_smoothing_factor: float = 0
     predict_with_generate: bool = True
     eval_steps: int = 16000
     logging_steps: int = 500
-    commit_hash: str = get_git_revision_short_hash()
+    # commit_hash: str = get_git_revision_short_hash()
 
     def save(self, path: str):
         with open(path, "w") as f:
@@ -74,6 +75,10 @@ class HuggingFaceTranslationModel(BaseTranslationModel):
             do_sample=config.do_sample,
             num_beams=config.num_beams,
             num_beam_groups=config.num_beam_groups,
+            top_k=config.top_k,
+            top_p=config.top_p,
+            temperature=config.temperature,
+            diversity_penalty=config.diversity_penalty,
             output_scores=output_scores,
             return_dict_in_generate=True
         )
@@ -133,6 +138,7 @@ class HuggingFaceTranslationModel(BaseTranslationModel):
             weight_decay=train_config.weight_decay,
             save_total_limit=train_config.save_total_limit,
             num_train_epochs=train_config.num_train_epochs,
+            label_smoothing_factor=train_config.label_smoothing_factor,
             predict_with_generate=train_config.predict_with_generate,
             eval_steps=train_config.eval_steps,
             logging_steps=train_config.logging_steps,

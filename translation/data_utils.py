@@ -14,6 +14,7 @@ import datasets
 from datasets import Dataset, DatasetDict
 from tqdm import tqdm
 import pandas as pd
+import sacrebleu
 from trie import Trie
 
 
@@ -774,3 +775,13 @@ def plot_dataset(df: pd.DataFrame):
     # Display the plot
     plt.show()
     plt.savefig("confidence.png")
+
+
+def get_rttl(model1, model2, sentence, translation_config):
+    # Gets the round trip translation of a sentence
+    return model2.translate(model1.translate(sentence, translation_config), translation_config)
+
+def rttl_chrf(model1, model2, sentence, translation_config):
+    # Gets the round trip translation of a sentence
+    rttl = model2.translate(model1.translate(sentence, translation_config), translation_config)
+    return rttl, sacrebleu.sentence_chrf(rttl, [sentence])

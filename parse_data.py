@@ -211,6 +211,41 @@ GREEK_TO_COPTIC = {
     greek: coptic for coptic, greek in COPTIC_TO_GREEK.items()
 }
 
+COPTIC_TO_ROMAN = {
+    'ⲁ': 'a',
+    'ⲃ': 'v',
+    'ⲅ': 'g',
+    'ⲇ': 'd',
+    'ⲉ': 'eie',
+    'ⲋ': 's',
+    'ⲍ': 'z',
+    'ⲏ': 'h',
+    'ⲑ': 'th',
+    'ⲓ': 'iau',
+    'ⲕ': 'k',
+    'ⲗ': 'l',
+    'ⲙ': 'm',
+    'ⲛ': 'n',
+    'ⲝ': 'ks',
+    'ⲟ': 'o',
+    'ⲡ': 'p',
+    'ⲣ': 'r',
+    'ⲥ': 's',
+    'ⲧ': 't',
+    'ⲩ': 'ua',
+    'ⲫ': 'f',
+    'ⲭ': 'kh',
+    'ⲯ': 'ps',
+    'ⲱ': 'oou',
+    'ϣ': 'sh',
+    'ϥ': 'f',
+    'ϧ': 'kh',
+    'ϩ': 'h',
+    'ϫ': 'g',
+    'ϭ': 'sh',
+    'ϯ': 'd'
+ }
+
 def greekify(coptic_text: str):
     chars = []
     for c in coptic_text:
@@ -223,6 +258,12 @@ def coptify(greek_text):
         chars.append(GREEK_TO_COPTIC.get(c, c))
     return "".join(chars)
 
+def romanize(coptic_text):
+    chars = []
+    for c in coptic_text:
+        l_c = c.lower()
+        chars.append(COPTIC_TO_ROMAN.get(l_c, l_c))
+    return "".join(chars)
 
 # def save_dataset(data: pd.DataFrame, src_lang, tgt_lang, src_col, tgt_col, data_path):
 #     if os.path.exists(data_path):

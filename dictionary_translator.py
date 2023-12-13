@@ -5,36 +5,46 @@ import re
 import gensim.downloader as api
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
+from tqdm import tqdm
+from transformers import (
+    AutoTokenizer,
+    AutoModel,
+)
+import torch
 
 
-class DictionaryTranslator():
+class DictionaryTranslator:
     def __init__(self):
         dictionary_data = pd.read_csv("datasets/raw_dictionary.csv")
-        
+
         self.cop_en_dict = defaultdict(list)
         self.en_cop_dict = defaultdict(list)
 
         for _, row in dictionary_data.iterrows():
             eng = row["eng"]
-            translation = re.sub(r'\([^)]*\)', '', eng)
-            translation = re.sub(r'\([^)]$', '', translation)
+            translation = re.sub(r"\([^)]*\)", "", eng)
+            translation = re.sub(r"\([^)]$", "", translation)
 
             eng = translation.split(",")
             for e in eng:
                 stripped_e = e.strip()
                 self.cop_en_dict[row["coptic"]].append(stripped_e)
                 self.en_cop_dict[stripped_e].append(row["coptic"])
-        # self.init_eng_cop()
+        self.init_eng_cop()
 
-    def _get_dictionry(self, src, tgt):
+    def _get_dictionary(self, src, tgt):
         if src == "cop" and tgt == "en":
             return self.cop_en_dict
         elif src == "en" and tgt == "cop":
             return self.en_cop_dict
         else:
             raise ValueError("Invalid source or target language")
+
     def translate(self, word, src="cop", tgt="en"):
-        dictionary = self._get_dictionry(src, tgt)
+        if src == "en":
+            return self.find_closest_coptic_word(word)
+
+        dictionary = self._get_dictionary(src, tgt)
         entry = dictionary[word]
         if len(entry) == 0:
             return "?"
@@ -44,40 +54,48 @@ class DictionaryTranslator():
         return translation
 
     def translate_sentence(self, sentence, src="cop", tgt="en"):
-        dictionary = self._get_dictionry(src, tgt)
         # remove punctuations
-        sentence = sentence.replace(".", "").replace(",", "").replace("?", "").replace("!", "")
+        sentence = (
+            sentence.replace(".", "").replace(",", "").replace("?", "").replace("!", "")
+        )
         words = sentence.split(" ")
         translation = [self.translate(word, src, tgt) for word in words]
         return " ".join(translation)
+    
+    def vectorize(self, phrase):
+        corpus_tokens = self.tokenizer(
+            phrase, padding=True, truncation=True, return_tensors="pt"
+        )
 
-    # Function to vectorize text using word embeddings
-    def vectorize_text(self, text):
-        words = text.lower().split()
-        word_vectors = [self.model[word] for word in words if word in self.model]
-        if len(word_vectors) == 0:
-            print("FUCK", text)
-        return np.mean(word_vectors, axis=0)
+        with torch.no_grad():
+            corpus_outputs = self.model(**corpus_tokens)
+            # print("Got model outputs...")
+            return (
+                torch.mean(corpus_outputs.last_hidden_state, dim=1)
+                .softmax(dim=-1)
+                .cpu()
+                .detach()
+                .numpy()
+            )[0]
 
     def init_eng_cop(self):
-        english_coptic_dict = {
-            k: v[0] for k, v in self.en_cop_dict.items()
-        }
+        english_coptic_dict = {k: v[0] for k, v in self.en_cop_dict.items()}
         # Load pre-trained word embeddings
-        self.model = api.load("glove-wiki-gigaword-100")
+        self.model = AutoModel.from_pretrained("bert-base-cased")
+        self.tokenizer = AutoTokenizer.from_pretrained("bert-base-cased")
         self.english_coptic_dict = english_coptic_dict
-        
-        # Vectorize all definitions
-        self.definition_vectors = {definition: self.vectorize_text(definition) for definition in self.english_coptic_dict}
-
+        self.dict_words = list(english_coptic_dict.keys())
+        self.eng_embeddings = []
+        for word in tqdm(self.dict_words):
+            self.eng_embeddings.append(self.vectorize(word))
+        self.eng_embeddings = torch.tensor(self.eng_embeddings)
     def find_closest_coptic_word(self, english_word):
-        english_vector = self.vectorize_text(english_word)
-        similarities = {definition: cosine_similarity([english_vector], [vec])[0][0] for definition, vec in self.definition_vectors.items()}
-        closest_definition = max(similarities, key=similarities.get)
-        return self.english_coptic_dict[closest_definition]
+        embedding = self.vectorize(english_word)
+        similarity_scores = cosine_similarity(
+            embedding.reshape(1, -1),
+            self.eng_embeddings
+        )
 
-# t = DictionaryTranslator()
-# # Example usage
-# english_word = "cake"
-# coptic_word = t.find_closest_coptic_word(english_word)
-# print(f"The closest Coptic word for '{english_word}' is '{coptic_word}'")
+        most_similar_index = similarity_scores.argmax()
+        most_similar_word = self.dict_words[most_similar_index]
+        return self.english_coptic_dict[most_similar_word]
