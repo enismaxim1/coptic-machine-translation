@@ -1,9 +1,9 @@
-
 __pycache__
 .vscode
 datasets/
 *.err
 *.out
+*.log
 translation/translation.egg-info/
 models/
 train_jobs/
@@ -12,3 +12,8 @@ uroman/
 marian_tokenizer_stuff/
 romanized_coptic_tokenizer/
 tmp/
+final_models/
+config.properties
+tmp/
+build/
+dist/
