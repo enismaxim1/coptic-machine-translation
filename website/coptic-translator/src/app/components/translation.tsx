@@ -87,15 +87,14 @@ const TranslationComponent: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col items-center bg-egyptian min-h-screen p-8 text-teal">
-      <div className="w-full flex justify-center text-scriptorium-red">
+      <div className="w-full flex justify-center text-scriptorium-red mb-20">
         <div className="w-1/2 pr-4">
           <h2 className="text-2xl mb-4 text-center font-hieroglyph">
             {isEnglishToCoptic ? "English" : "Coptic"}
           </h2>
           <textarea
             ref={srcTextRef}
-            className="border p-2 w-full bg-scriptorium-red-left text-teal rounded-lg"
+            className="border p-2 w-full bg-scriptorium-red-left rounded-lg"
             onChange={(e) => {
               handleSrcTextChange(e);
               autoResize(e);
@@ -124,7 +123,8 @@ const TranslationComponent: React.FC = () => {
           </h2>
           <textarea
             ref={tgtTextRef}
-            className="border p-2 w-full bg-scriptorium-red-right text-teal rounded-lg no-highlights"
+            placeholder="Translation"
+            className="border p-2 w-full bg-scriptorium-red-right rounded-lg no-highlights"
             value={tgtTextLoading ? tgtText + "..." : tgtText}
             readOnly={true}
             style={{
@@ -137,7 +137,6 @@ const TranslationComponent: React.FC = () => {
           />
         </div>
       </div>
-    </div>
   );
 };
 

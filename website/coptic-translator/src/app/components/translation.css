@@ -35,6 +35,11 @@
     -webkit-tap-highlight-color:  rgba(255, 255, 255, 0);
 }
 
+.text-scriptorium-grey {
+    color: #4A4A4A;
+    font-family: 'Asul', Helvetica, Arial, sans-serif;
+    font-size: 24px;
+}
 .text-scriptorium-red {
     color: #9f4739;
     font-family: 'Asul', Helvetica, Arial, sans-serif;
