@@ -132,6 +132,7 @@ const TranslationComponent: React.FC = () => {
               resize: "none",
               overflow: "hidden",
               outline: "none",
+              border: "none",
             }}
           />
         </div>
