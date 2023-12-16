@@ -9,7 +9,7 @@ const Footer: React.FC = () => {
       className="text-gray-800 p-4 absolute bottom-0 left-0 right-0 text-scriptorium-grey"
       style={{ backgroundColor: "#eef1f3" }}
     >
-      <div className="container mx-5 text-sm">
+      <div className="container px-4 text-sm">
         <p className="mb-2">
           Created by{" "}
           <a href="mailto:anm4+coptic@williams.edu">Andrew Megalaa </a>

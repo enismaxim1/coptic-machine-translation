@@ -47,15 +47,16 @@ const TranslationComponent: React.FC = () => {
         signal: signal,
       })
         .then((response) => {
+          if (response.status == 200) {
+            return response.json();
+          }
           if (response.status === 422) {
             setError("Input too long. Try smaller chunks at a time.");
             return { translation: "" };
-          }
-          if (response.status === 500) {
+          } else {
             setError("Server is down. Please try again later.");
             return { translation: "" };
           }
-          return response.json();
         })
         .then((data) => data.translation)
         .catch((err) => {

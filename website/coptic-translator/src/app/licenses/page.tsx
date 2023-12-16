@@ -5,7 +5,7 @@ import "../components/translation.css";
 
 const Licenses = () => {
   return (
-    <div className="-mb-20 -mt-10">
+    <div>
       <Info title="Software Licenses">
         The Coptic Translator is licensed under the{" "}
         <a
