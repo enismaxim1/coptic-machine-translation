@@ -21,22 +21,29 @@ const Footer: React.FC = () => {
           s not perfect and will sometimes produce inaccurate results. Use with
           caution.
         </p>
-        <p className="mb-2">
-          Caroline T. Schroeder, Amir Zeldes, et al., Coptic SCRIPTORIUM,
-          2013-2023, http://copticscriptorium.org.
-        </p>
+
         <div className="flex justify-start">
-          <a href="#" className="text-blue-500 hover:text-blue-700 mr-4">
+          <a
+            href="#"
+            className="text-blue-500 hover:text-blue-700 mr-4"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
             Our Paper
           </a>
-          <a href="#" className="text-blue-500 hover:text-blue-700 mr-4">
+          <a
+            href="https://github.com/enismaxim1/coptic-machine-translation"
+            className="text-blue-500 hover:text-blue-700 mr-4"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
             GitHub
           </a>
           <Link
             href="/licenses"
             className="text-blue-500 hover:text-blue-700 mr-4"
           >
-            Licenses
+            Data and Licenses
           </Link>
           <a
             href="mailto:anm4+coptic@williams.edu,me4+coptic@williams.edu"
@@ -44,7 +51,6 @@ const Footer: React.FC = () => {
           >
             Contact Us
           </a>
-          {/* Add more links as needed */}
         </div>
       </div>
     </footer>
