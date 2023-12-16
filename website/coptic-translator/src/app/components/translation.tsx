@@ -3,11 +3,13 @@ import { FaExchangeAlt } from "react-icons/fa";
 // import css
 import "./translation.css";
 
-const ENGLISH_API = "/api/predictions/english";
-const COPTIC_API = "/api/predictions/coptic";
+console.log(process.env + "RR");
+const ENGLISH_API: string = process.env.NEXT_PUBLIC_ENGLISH_API ?? "";
+const COPTIC_API: string = process.env.NEXT_PUBLIC_COPTIC_API ?? "";
+
 const DELAY = 500;
-const regexEnglish = /^[a-zA-Z\s.,!?'"-]*$/;
-const regexCoptic = /^[\u2C80-\u2CFF\u03E2-\u03EF\s.,!?'"-]*$/;
+const regexEnglish = /^[a-zA-Z\s.,!?'"-;:]*$/;
+const regexCoptic = /^[\u2C80-\u2CFF\u03E2-\u03EF\d\s.,!?'"-;:]*$/;
 
 const TranslationComponent: React.FC = () => {
   const [srcText, setSrcText] = useState<string>("");
@@ -16,6 +18,7 @@ const TranslationComponent: React.FC = () => {
   const [isEnglishToCoptic, setIsEnglishToCoptic] = useState<boolean>(true);
   const srcTextRef = React.useRef<HTMLTextAreaElement>(null);
   const tgtTextRef = React.useRef<HTMLTextAreaElement>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const placeholderText = (isEnglishToCoptic: boolean) => {
     return `Type or paste ${
@@ -27,15 +30,15 @@ const TranslationComponent: React.FC = () => {
     let translationTimeout: NodeJS.Timeout;
     const controller = new AbortController();
     const signal = controller.signal;
-    translationTimeout = setTimeout(() => {
+    translationTimeout = setTimeout(async () => {
       const api = isEnglishToCoptic ? COPTIC_API : ENGLISH_API;
       if (srcText === "") {
         setTgtText("");
+        setError(null);
         return;
       }
       setTgtTextLoading(true);
-
-      fetch(api, {
+      const translation = await fetch(api, {
         method: "POST",
         headers: {
           "Content-Type": "text/plain",
@@ -43,15 +46,23 @@ const TranslationComponent: React.FC = () => {
         body: srcText,
         signal: signal,
       })
-        .then((response) => response.json())
         .then((response) => {
-          if (!response.translation) {
-            throw new Error("Translation failed");
+          if (response.status === 422) {
+            setError("Input too long. Try smaller chunks at a time.");
+            return { translation: "" };
           }
-          setTgtText(response.translation);
+          if (response.status === 500) {
+            setError("Server is down. Please try again later.");
+            return { translation: "" };
+          }
+          return response.json();
         })
-        .catch((error) => console.error(error))
+        .then((data) => data.translation)
+        .catch((err) => {
+          return "";
+        })
         .finally(() => setTgtTextLoading(false));
+      setTgtText(translation);
     }, DELAY);
     return () => {
       clearTimeout(translationTimeout);
@@ -70,24 +81,36 @@ const TranslationComponent: React.FC = () => {
     const newText = e.target.value;
     if (isEnglishToCoptic) {
       if (regexEnglish.test(newText)) {
+        setError(null);
         setSrcText(newText);
+      } else {
+        setError("Only English is allowed. Please use the English keyboard.");
       }
     } else {
       if (regexCoptic.test(newText)) {
+        setError(null);
         setSrcText(newText);
+      } else {
+        setError(
+          "Only Coptic input is allowed. Please use the Coptic keyboard."
+        );
       }
     }
   };
 
   const autoResize = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     if (srcTextRef.current && tgtTextRef.current) {
-      srcTextRef.current.style.height = `${e.target.scrollHeight}px`;
-      tgtTextRef.current.style.height = `${e.target.scrollHeight}px`;
+      srcTextRef.current.style.height = "auto";
+      srcTextRef.current.style.height = `${srcTextRef.current.scrollHeight}px`;
+
+      tgtTextRef.current.style.height = "auto";
+      tgtTextRef.current.style.height = `${srcTextRef.current.scrollHeight}px`;
     }
   };
 
   return (
-      <div className="w-full flex justify-center text-scriptorium-red mb-20">
+    <div>
+      <div className="w-full flex justify-center text-scriptorium-red mb-10">
         <div className="w-1/2 pr-4">
           <h2 className="text-2xl mb-4 text-center font-hieroglyph">
             {isEnglishToCoptic ? "English" : "Coptic"}
@@ -124,7 +147,7 @@ const TranslationComponent: React.FC = () => {
           <textarea
             ref={tgtTextRef}
             placeholder="Translation"
-            className="border p-2 w-full bg-scriptorium-red-right rounded-lg no-highlights"
+            className="border p-2 w-full bg-scriptorium-red-left rounded-lg no-highlights"
             value={tgtTextLoading ? tgtText + "..." : tgtText}
             readOnly={true}
             style={{
@@ -137,6 +160,8 @@ const TranslationComponent: React.FC = () => {
           />
         </div>
       </div>
+      {error && <div className="text-red-500">{"❗️ " + error}</div>}
+    </div>
   );
 };
 

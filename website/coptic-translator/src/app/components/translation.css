@@ -7,10 +7,7 @@
 }
 
 .bg-egyptian {
-    /* Make this a nice gold color */
     background-color: #F6F6F6;
-    /* background-image: url("vintage-grunge-paper-background.jpg");
-    background-position: center; */
 }
 
 .bg-sandstone {
@@ -29,7 +26,7 @@
 }
 
 .bg-scriptorium-red-right {
-    background-color: #d2aca97e;
+    background-color: #dbbbb97e;
     border-color: #9f4739;
     border-width: 2px;
     -webkit-tap-highlight-color:  rgba(255, 255, 255, 0);
