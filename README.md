@@ -1,38 +1,36 @@
-## Neural Machine Translator
+## Coptic Machine Translator
 
-Code Credits: https://nlp.seas.harvard.edu/annotated-transformer/
+A Python research module containing code to generate and analyze neural machine translators, parse Coptic datasets, and code to create a simple Google-translate-like frontend. This repo was used to build https://www.coptictranslator.com.
 
-
-A Python module for creating custom neural machine translators from a source to target language.
 
 ### Installing the Package
-To install the `translation` package, you must first ensure that your virtual environment has all the required dependencies. TODO: add dependency management.
-Install the package by running `pip install -e translation/` in your terminal at the root of the Git repo.
+To install the `translation` package, you must first ensure that your virtual environment has all the required dependencies. Run `pip install -e .` from the base directory and install all required modules into your virtual environment.
 
-### Creating a Translator
-To create a translator, use the following code:
-```
-from models import TranslationModel
-translator = TranslationModel('{src_language}', '{tgt_language}', dataset)
-```
-where `dataset` is a HuggingFace-style dataset containing a train, validation, and test split, each with a single 'translation' feature of source-target dictionaries of parallel sentences.
+### Running the Website
+The translation API paths are stored in the `NEXT_PUBLIC_ENGLISH_API` and `NEXT_PUBLIC_COPTIC_API` environmental variables. To run the website locally with your own translation APIs, refer to the instructions in the [Running a Backend](#running-a-backend) section.
 
-The first time this is run, the model will train on your system's GPUs. After it has trained, the results will be cached and future retrievals will not be needed.
+To run the frontend:
+1. Make sure `npm` is installed onto your machine.
+2. Navigate to the `website/coptic-translator` directory.
+3. Run `npm install`.
+4. Run `npm run dev`.
 
-To translate, use the `.translate` method on the `TranslationModel` with a source sentence argument:
-`translated = translator.translate('{source sentence input}')`
+### Running a Backend
+The translation models are not included in the GitHub repo. Eventually, we plan to host our model weights on HuggingFace. If you would like to host your own translation models, we recommend the following steps:
+1. Load source-target and target-source PyTorch models (from HuggingFace, or train your own using the provided utilities).
+2. Create a source-target and target-source REST API using [TorchServe](https://pytorch.org/serve/).
+3. Store the APIs in the `NEXT_PUBLIC_ENGLISH_API` and `NEXT_PUBLIC_COPTIC_API` environmental variables.
+4. Run the server and the frontend. Now, your frontend should have full functionality.
 
-### Creating a Dataset
-If you have local parallel data files, then you can use the `load_dataset` function in the `src/data_utils.py` module. Store your data with the files 
-```
-parent/train/{src}.txt
-parent/train/{tgt}.txt
-parent/validation/{src}.txt
-parent/validation/{tgt}.txt
-parent/test/{src}.txt
-parent/test/{tgt}.txt
-```
-Then, call the function like so: `load_datasets('parent', '{src}-{tgt}')` to generate a dataset in the proper form.
+### License
+
+This project is licensed under the MIT License - see the LICENSE.md file for details.
+
+### MIT License Summary
+You can use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the software.
+This software is provided "AS IS", without warranty of any kind.
+You must include the original copyright and permission notice in any copy of the software or substantial portion of it.
+For the full MIT License text, please see the LICENSE.md file in this repository.
 
 
 
